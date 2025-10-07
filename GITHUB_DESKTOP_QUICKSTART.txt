@@ -1,0 +1,155 @@
+================================================================================
+                    GITHUB DESKTOP - 5 MINUTE GUIDE
+================================================================================
+
+STEP 1: DOWNLOAD & INSTALL
+--------------------------------------------------------------------------------
+1. Go to: https://desktop.github.com
+2. Click "Download for Windows"
+3. Run installer
+4. Open GitHub Desktop
+
+
+STEP 2: SIGN IN
+--------------------------------------------------------------------------------
+1. Click "Sign in to GitHub.com"
+2. Enter your username and password
+3. Click "Authorize desktop"
+
+
+STEP 3: ADD YOUR PROJECT
+--------------------------------------------------------------------------------
+1. Click: File → Add local repository
+
+2. Click "Choose..." button
+
+3. Navigate to this folder:
+   C:\Users\IT\OneDrive\Desktop\Claude Projects\NDA Reviewer\builds\20251005_211648
+
+4. Click "Select Folder"
+
+5. You'll see: "This directory does not appear to be a Git repository"
+
+6. Click the "create a repository" link
+
+
+STEP 4: CREATE REPOSITORY
+--------------------------------------------------------------------------------
+Name: nda-reviewer
+
+Description: Automated NDA redlining with Edgewater checklist and review UI
+
+☐ UNCHECK "Initialize this repository with a README"
+
+Click "Create Repository"
+
+
+STEP 5: COMMIT YOUR FILES
+--------------------------------------------------------------------------------
+Summary field: Initial commit: NDA Reviewer with Review UI
+
+Click the blue "Commit to main" button
+
+
+STEP 6: PUBLISH TO GITHUB
+--------------------------------------------------------------------------------
+1. Click "Publish repository" at the top
+
+2. ☑ CHECK "Keep this code private" (recommended)
+
+3. Click "Publish Repository"
+
+4. Wait 10-30 seconds...
+
+DONE! ✓
+
+
+VERIFY IT WORKED
+--------------------------------------------------------------------------------
+1. In GitHub Desktop: Repository → View on GitHub
+
+2. Browser opens to: https://github.com/YOUR_USERNAME/nda-reviewer
+
+3. You should see all your files!
+
+4. Check that .env is NOT there (good!)
+
+
+NEXT STEPS
+--------------------------------------------------------------------------------
+Now that your code is on GitHub:
+
+1. Deploy Frontend to Vercel
+   See: GITHUB_VERCEL_DEPLOYMENT.md
+
+2. Deploy Backend to Railway
+   See: GITHUB_VERCEL_DEPLOYMENT.md
+
+
+TROUBLESHOOTING
+--------------------------------------------------------------------------------
+Problem: "Authentication failed"
+Fix: File → Options → Accounts → Sign out → Sign back in
+
+Problem: ".env file showing"
+Fix: Right-click .env → Ignore file
+
+Problem: "Can't find folder"
+Fix: Copy this path and paste into address bar:
+     C:\Users\IT\OneDrive\Desktop\Claude Projects\NDA Reviewer\builds\20251005_211648
+
+
+MAKING FUTURE CHANGES
+--------------------------------------------------------------------------------
+1. Edit your code
+2. Open GitHub Desktop
+3. Type summary of changes
+4. Click "Commit to main"
+5. Click "Push origin"
+
+Your changes are now on GitHub!
+
+
+VISUAL GUIDE
+--------------------------------------------------------------------------------
+
+GitHub Desktop Screen:
+
+┌─────────────────────────────────────────────────┐
+│ Repository: nda-reviewer             [Publish] │
+├──────────────┬──────────────────────────────────┤
+│ Changes (95) │  File preview                   │
+│              │                                  │
+│ ☑ backend/   │  Shows your code here           │
+│ ☑ frontend/  │                                  │
+│ ☑ README.md  │                                  │
+├──────────────┴──────────────────────────────────┤
+│ Summary:                                        │
+│ ┌─────────────────────────────────────────────┐ │
+│ │ Initial commit: NDA Reviewer               │ │
+│ └─────────────────────────────────────────────┘ │
+│                                                 │
+│              [Commit to main]                   │
+└─────────────────────────────────────────────────┘
+
+
+THAT'S IT!
+--------------------------------------------------------------------------------
+
+Your code is now:
+✓ Backed up on GitHub
+✓ Version controlled
+✓ Ready to deploy
+
+Time: 5 minutes
+Difficulty: Easy
+
+
+FULL GUIDE
+--------------------------------------------------------------------------------
+See: GITHUB_DESKTOP_GUIDE.md (detailed with screenshots)
+
+
+================================================================================
+                    QUESTIONS? SEE TROUBLESHOOTING ABOVE
+================================================================================

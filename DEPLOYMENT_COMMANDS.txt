@@ -1,0 +1,282 @@
+================================================================================
+NDA REVIEWER - DEPLOYMENT COMMANDS REFERENCE
+================================================================================
+
+📍 PROJECT LOCATION
+-------------------
+C:\Users\IT\OneDrive\Desktop\Claude Projects\NDA Reviewer\builds\20251005_211648
+
+
+STEP 1: INITIALIZE GIT REPOSITORY
+================================================================================
+
+cd "C:\Users\IT\OneDrive\Desktop\Claude Projects\NDA Reviewer\builds\20251005_211648"
+
+git init
+
+git config --global user.name "Your Name"
+git config --global user.email "your.email@example.com"
+
+git add .
+
+git commit -m "Initial commit: NDA Automated Redline Tool with Review UI"
+
+
+STEP 2: CREATE GITHUB REPOSITORY
+================================================================================
+
+1. Go to: https://github.com
+2. Click "+" → "New repository"
+3. Name: nda-reviewer
+4. Visibility: Private (recommended)
+5. DO NOT initialize with README
+6. Click "Create repository"
+
+
+STEP 3: PUSH TO GITHUB
+================================================================================
+
+Replace YOUR_USERNAME with your actual GitHub username!
+
+git remote add origin https://github.com/YOUR_USERNAME/nda-reviewer.git
+
+git branch -M main
+
+git push -u origin main
+
+
+STEP 4: DEPLOY BACKEND TO RAILWAY
+================================================================================
+
+1. Go to: https://railway.app
+2. Sign up with GitHub
+3. "New Project" → "Deploy from GitHub repo"
+4. Select: nda-reviewer
+5. Add environment variables:
+
+   OPENAI_API_KEY = sk-proj-...
+   ANTHROPIC_API_KEY = sk-ant-...
+   USE_PROMPT_CACHING = true
+   VALIDATION_RATE = 0.15
+
+6. Set start command:
+
+   cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+7. Click Deploy
+8. COPY THE URL (e.g., https://nda-reviewer-production.up.railway.app)
+
+
+STEP 5: UPDATE CORS IN BACKEND (Important!)
+================================================================================
+
+After you get your Vercel URL, update backend CORS:
+
+Edit: backend/app/main.py
+
+Find the CORS configuration and update:
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://YOUR-VERCEL-URL.vercel.app",  # Add your Vercel URL
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+Then commit and push:
+
+git add backend/app/main.py
+git commit -m "Update CORS for production"
+git push
+
+
+STEP 6: DEPLOY FRONTEND TO VERCEL
+================================================================================
+
+1. Go to: https://vercel.com
+2. Sign up with GitHub (if new)
+3. "Add New..." → "Project"
+4. Import: nda-reviewer
+5. Configure:
+
+   Root Directory: frontend
+   Framework: Next.js (auto-detected)
+   Build Command: npm run build
+   Output Directory: .next
+
+6. Add Environment Variable:
+
+   Name: NEXT_PUBLIC_API_URL
+   Value: https://nda-reviewer-production.up.railway.app
+   (Use your Railway URL from Step 4)
+
+7. Click "Deploy"
+8. Wait 2-3 minutes
+9. COPY YOUR VERCEL URL
+
+
+STEP 7: TEST YOUR DEPLOYMENT
+================================================================================
+
+Go to: https://your-vercel-url.vercel.app
+
+1. Upload a .docx file
+2. Wait for processing
+3. Review redlines
+4. Click accept/reject
+5. Download final document
+
+
+UPDATING YOUR APP (Future Changes)
+================================================================================
+
+Make changes locally, then:
+
+git add .
+git commit -m "Description of your changes"
+git push
+
+Vercel auto-deploys! Railway too!
+
+
+TROUBLESHOOTING COMMANDS
+================================================================================
+
+Check git status:
+-----------------
+git status
+
+View commit history:
+--------------------
+git log --oneline
+
+Check remote URL:
+-----------------
+git remote -v
+
+Test backend locally:
+---------------------
+cd backend
+python -m app.main
+
+Test frontend locally:
+----------------------
+cd frontend
+npm run dev
+
+
+IMPORTANT URLS TO SAVE
+================================================================================
+
+GitHub Repository:
+https://github.com/YOUR_USERNAME/nda-reviewer
+
+Railway Backend:
+https://your-backend.up.railway.app
+
+Vercel Frontend:
+https://your-app.vercel.app
+
+Vercel Project Dashboard:
+https://vercel.com/YOUR_USERNAME/nda-reviewer
+
+Railway Project Dashboard:
+https://railway.app/project/YOUR_PROJECT_ID
+
+
+ENVIRONMENT VARIABLES REFERENCE
+================================================================================
+
+BACKEND (Railway):
+------------------
+OPENAI_API_KEY=sk-proj-...
+ANTHROPIC_API_KEY=sk-ant-...
+USE_PROMPT_CACHING=true
+VALIDATION_RATE=0.15
+CONFIDENCE_THRESHOLD=95
+CORS_ORIGINS=https://your-vercel-url.vercel.app
+
+FRONTEND (Vercel):
+------------------
+NEXT_PUBLIC_API_URL=https://your-railway-url.up.railway.app
+
+
+COST ESTIMATES
+================================================================================
+
+Vercel (Frontend):     $0/month (free tier)
+Railway (Backend):     $5-10/month
+OpenAI API:           ~$0.06 per document
+Anthropic API:        ~$0.02 per document
+
+Total: ~$5-10/month + usage costs
+
+
+SUPPORT RESOURCES
+================================================================================
+
+Full Guide:         GITHUB_VERCEL_DEPLOYMENT.md
+Quick Start:        DEPLOYMENT_QUICKSTART.md
+Project Summary:    PROJECT_SUMMARY.md
+Frontend Docs:      frontend/README.md
+Backend API:        https://your-backend-url.up.railway.app/docs
+
+Vercel Docs:        https://vercel.com/docs
+Railway Docs:       https://docs.railway.app
+
+
+COMMON ISSUES & FIXES
+================================================================================
+
+"Permission denied (publickey)":
+---------------------------------
+Use Personal Access Token instead of password
+GitHub → Settings → Developer settings → Personal access tokens
+
+"Cannot connect to API":
+-------------------------
+1. Check NEXT_PUBLIC_API_URL in Vercel
+2. Check CORS in backend
+3. Check backend is running on Railway
+
+"Build failed":
+---------------
+1. Check Root Directory is set to "frontend"
+2. Review build logs in Vercel
+3. Test build locally: cd frontend && npm run build
+
+"Port already in use":
+----------------------
+Change port in start command or kill existing process
+
+
+QUICK REDEPLOY
+================================================================================
+
+Frontend (Vercel):
+------------------
+1. Vercel Dashboard → Deployments
+2. Click ... → Redeploy
+
+Backend (Railway):
+------------------
+1. Railway Dashboard → Deployments
+2. Click Deploy or wait for auto-deploy
+
+Or just push to GitHub:
+-----------------------
+git push
+
+Both services auto-deploy on git push!
+
+
+================================================================================
+END OF DEPLOYMENT COMMANDS
+================================================================================
+
+Save this file for reference!
+Good luck! 🚀

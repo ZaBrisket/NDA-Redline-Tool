@@ -1,0 +1,169 @@
+rules:
+  # TERM LIMITS - Critical
+  - id: term_limit_perpetual
+    type: confidentiality_term
+    pattern: '\b(?:perpetual|indefinite|no\s+expir(?:ation|y)|without\s+(?:time\s+)?limit)\b'
+    severity: critical
+    action: delete
+    explanation: "Remove perpetual/indefinite confidentiality terms"
+
+  - id: term_limit_insert_18mo
+    type: confidentiality_term
+    pattern: 'obligations?\s+(?:of|under)\s+this\s+Agreement\s+shall\s+(?:survive|continue|remain)'
+    replacement: 'obligations of the parties under this Agreement shall survive for a period of eighteen (18) months following the date hereof'
+    severity: critical
+    action: replace
+    explanation: "Add 18-month term limit"
+
+  - id: term_limit_expiration
+    type: confidentiality_term
+    pattern: 'agreement\s+shall\s+(?:expire|terminate|end)(?!\s+eighteen)'
+    addition: 'This Agreement shall expire eighteen (18) months from the date of this Agreement.'
+    severity: critical
+    action: add_after
+    explanation: "Add explicit 18-month expiration"
+
+  # GOVERNING LAW - Moderate
+  - id: governing_law_change_delaware
+    type: governing_law
+    pattern: '(?:governed|construed|interpreted)\s+(?:by|in\s+accordance\s+with)\s+(?:the\s+)?laws\s+of\s+(?:the\s+)?(?:State\s+of\s+)?(?!Delaware)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'
+    replacement: 'governed by and construed in accordance with the laws of the State of Delaware'
+    severity: moderate
+    action: replace
+    explanation: "Change governing law to Delaware"
+
+  # DOCUMENT RETENTION - Critical
+  - id: retention_carveout
+    type: document_retention
+    pattern: '(?:return|destroy).*?(?:all|any).*?(?:Confidential\s+)?(?:Information|documents|materials)(?!.*?(?:legal|regulatory|archival))'
+    addition: 'Notwithstanding the foregoing, Recipient may retain copies of Confidential Information as necessary for legal, regulatory, or archival purposes, or as required by regulation, or legal process, provided such retained information remains subject to the confidentiality obligations herein.'
+    severity: critical
+    action: add_after
+    explanation: "Add legal/regulatory/archival retention carveout"
+
+  - id: return_destroy_option
+    type: document_retention
+    pattern: '\b(?:shall|must)\s+return\b(?!.*?or\s+destroy)'
+    replacement: 'shall, upon request, either return or destroy'
+    severity: moderate
+    action: replace
+    explanation: "Allow destruction option for confidential materials"
+
+  # NON-SOLICIT CARVEOUTS - Critical
+  - id: non_solicit_carveouts
+    type: employee_solicitation
+    pattern: '(?:shall\s+not|will\s+not|agree\s+not\s+to)\s+(?:directly\s+or\s+indirectly\s+)?(?:solicit|hire|employ).*?(?:employee|personnel)(?!.*?(?:general\s+advertisement|employee-initiated|prior\s+(?:employment\s+)?discussion|terminated))'
+    addition: |
+      Nothing herein shall prevent Recipient from hiring such persons who: (i) respond to general advertisements or recruiting efforts not specifically directed at the Disclosing Party's employees; (ii) initiate discussions with Recipient without any direct or indirect solicitation; (iii) had prior employment discussions with Recipient before receiving Confidential Information; or (iv) were terminated by the Disclosing Party prior to commencement of discussions with Recipient.
+    severity: critical
+    action: add_after
+    explanation: "Add standard non-solicit carveouts"
+
+  # AFFILIATE REMOVAL - Moderate
+  - id: remove_affiliate_references
+    type: affiliate_clause
+    pattern: '\b(?:and|or|including)\s+(?:its|our|their)\s+affiliates?\b'
+    severity: moderate
+    action: delete
+    explanation: "Remove affiliate references"
+
+  - id: remove_affiliate_standalone
+    type: affiliate_clause
+    pattern: ',?\s*(?:subsidiaries|affiliates|parents|related\s+entities),?\s*'
+    severity: moderate
+    action: delete
+    explanation: "Remove affiliate/subsidiary references"
+
+  # LEGAL MODIFIERS - Moderate
+  - id: best_efforts_to_commercially_reasonable
+    type: legal_modifier
+    pattern: '\bbest\s+efforts?\b'
+    replacement: 'commercially reasonable efforts'
+    severity: moderate
+    action: replace
+    explanation: "Change 'best efforts' to 'commercially reasonable efforts'"
+
+  - id: remove_sole_discretion
+    type: legal_modifier
+    pattern: '\b(?:sole|absolute)\s+discretion\b'
+    replacement: 'reasonable discretion'
+    severity: moderate
+    action: replace
+    explanation: "Moderate discretion language"
+
+  # COMPETITION SAFE HARBOR - Critical
+  - id: competition_disclaimer
+    type: competition_clause
+    pattern: '(?:Confidential\s+Information|this\s+Agreement)(?!.*?(?:will\s+not|shall\s+not).*?(?:prevent|preclude|restrict).*?(?:business|compet))'
+    addition: |
+      Recipient's receipt and use of Confidential Information will not, in and of itself, prevent or restrict Recipient in any way from carrying on its business in the ordinary course, including without limitation, making investments in, acquisitions of, or competing with businesses similar to or competitive with Disclosing Party.
+    severity: critical
+    action: add_after
+    context_required: 'confidential.*information.*disclosed'
+    explanation: "Add competition safe harbor language"
+
+  # INJUNCTIVE RELIEF MODIFICATION - Moderate
+  - id: injunctive_relief_balance
+    type: remedies
+    pattern: '(?:entitled|right)\s+to\s+(?:seek\s+)?injunctive\s+relief(?!.*?upon.*?(?:final|binding).*?determination)'
+    addition: ', upon a final binding determination of a court of competent jurisdiction,'
+    severity: moderate
+    action: add_inline
+    explanation: "Require court determination for injunctive relief"
+
+  # REPRESENTATIONS AND WARRANTIES - Moderate
+  - id: remove_accuracy_representation
+    type: representations
+    pattern: '(?:represent|warrant).*?(?:accuracy|completeness|correctness).*?(?:Information|materials)'
+    severity: moderate
+    action: delete
+    explanation: "Remove representations about information accuracy"
+
+  - id: remove_ownership_representation
+    type: representations
+    pattern: '(?:represent|warrant).*?(?:own|ownership|right|title).*?(?:Information|materials)'
+    severity: moderate
+    action: delete
+    explanation: "Remove ownership representations"
+
+  # INDEMNIFICATION - High
+  - id: remove_indemnification
+    type: indemnification
+    pattern: '(?:shall\s+)?(?:indemnify|hold\s+harmless).*?(?:from|against).*?(?:claim|loss|damage|liability)'
+    severity: high
+    action: delete
+    explanation: "Remove indemnification clauses"
+
+  # BROKER/COMMISSION LANGUAGE - High
+  - id: remove_broker_commission
+    type: broker_clause
+    pattern: '(?:Broker|commission|brokerage).*?(?:paid|due|entitled).*?(?:at\s+closing|upon\s+sale)'
+    severity: high
+    action: delete
+    explanation: "Remove broker/commission language"
+
+  # ASSIGNMENT RESTRICTIONS - Moderate
+  - id: allow_assignment
+    type: assignment
+    pattern: 'may\s+not\s+(?:be\s+)?assign(?:ed)?.*?without.*?(?:prior\s+)?(?:written\s+)?consent'
+    replacement: 'may be assigned to affiliates or in connection with a merger, acquisition, or sale of all or substantially all assets'
+    severity: moderate
+    action: replace
+    explanation: "Allow assignment in M&A situations"
+
+  # JURISDICTION/VENUE - Moderate
+  - id: remove_specific_venue
+    type: jurisdiction
+    pattern: '(?:exclusive\s+)?(?:jurisdiction|venue).*?(?:court|County|District)'
+    severity: moderate
+    action: delete
+    explanation: "Remove specific venue requirements"
+
+  # WRITTEN REQUEST FOR RETURN - Moderate
+  - id: require_written_request
+    type: document_retention
+    pattern: '(?:shall|must|will)\s+(?:immediately\s+)?(?:return|destroy)(?!.*?(?:upon|following)\s+(?:written\s+)?request)'
+    replacement: 'shall, upon written request,'
+    severity: moderate
+    action: add_inline
+    explanation: "Require written request for return/destruction"
