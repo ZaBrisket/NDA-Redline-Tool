@@ -30,7 +30,11 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=[
+        "https://nda-redline-tool.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,6 +75,17 @@ async def upload_document(file: UploadFile = File(...)):
                 detail="Only .docx files are supported"
             )
 
+        # Read file content
+        content = await file.read()
+
+        # Validate file size (50MB limit)
+        MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE // 1024 // 1024}MB"
+            )
+
         # Generate job ID
         job_id = str(uuid.uuid4())
 
@@ -78,7 +93,6 @@ async def upload_document(file: UploadFile = File(...)):
         file_path = UPLOAD_PATH / f"{job_id}_{file.filename}"
 
         with file_path.open("wb") as f:
-            content = await file.read()
             f.write(content)
 
         # Submit to job queue

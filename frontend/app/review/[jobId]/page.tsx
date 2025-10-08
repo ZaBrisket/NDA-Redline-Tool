@@ -50,7 +50,8 @@ export default function ReviewPage() {
     if (!jobId) return;
 
     // Subscribe to SSE for real-time updates
-    const eventSource = new EventSource(`/api/jobs/${jobId}/events`);
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const eventSource = new EventSource(`${apiUrl}/api/jobs/${jobId}/events`);
 
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -80,7 +81,8 @@ export default function ReviewPage() {
 
   const fetchJobDetails = async () => {
     try {
-      const response = await fetch(`/api/jobs/${jobId}/status`);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/api/jobs/${jobId}/status`);
 
       if (!response.ok) {
         throw new Error('Failed to fetch job details');
@@ -107,7 +109,8 @@ export default function ReviewPage() {
 
     // Send to backend
     try {
-      await fetch(`/api/jobs/${jobId}/decisions`, {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      await fetch(`${apiUrl}/api/jobs/${jobId}/decisions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -125,7 +128,8 @@ export default function ReviewPage() {
     setDownloading(true);
 
     try {
-      const response = await fetch(`/api/jobs/${jobId}/download?final=true`);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/api/jobs/${jobId}/download?final=true`);
 
       if (!response.ok) {
         throw new Error('Download failed');
