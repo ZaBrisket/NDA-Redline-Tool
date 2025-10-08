@@ -7,7 +7,7 @@ import json
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 from docx import Document
 
 from ..core.text_indexer import WorkingTextIndexer
