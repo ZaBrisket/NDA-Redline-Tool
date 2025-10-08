@@ -14,6 +14,9 @@ from ..core.text_indexer import WorkingTextIndexer
 from ..core.rule_engine import RuleEngine
 from ..core.llm_orchestrator import LLMOrchestrator
 from ..core.docx_engine import TrackChangesEngine, RedlineValidator
+from ..core.context_analyzer import ContextualAnalyzer
+from ..core.reasonableness_scorer import ReasonablenessScorer
+from ..core.redline_optimizer import RedlineOptimizer
 from ..models.schemas import JobStatus, RedlineModel, RedlineSeverity, RedlineSource
 from ..models.checklist_rules import get_rule_explanation
 
@@ -27,10 +30,14 @@ class DocumentProcessor:
     4. Generate redlined document
     """
 
-    def __init__(self, storage_path: str = "./storage"):
+    def __init__(self, storage_path: str = "./storage", strategy: str = "balanced"):
         self.storage_path = Path(storage_path)
         self.rule_engine = RuleEngine()
         self.llm_orchestrator = LLMOrchestrator()
+        self.context_analyzer = ContextualAnalyzer()
+        self.scorer = ReasonablenessScorer()
+        self.optimizer = RedlineOptimizer()
+        self.strategy = strategy  # 'light', 'balanced', or 'aggressive'
 
     async def process_document(
         self,
@@ -65,18 +72,32 @@ class DocumentProcessor:
             working_text_path.parent.mkdir(parents=True, exist_ok=True)
             working_text_path.write_text(working_text, encoding='utf-8')
 
+            # Update status: analyzing context
+            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 20)
+
+            # 2. Analyze existing document context
+            context = self.context_analyzer.analyze_existing_terms(working_text)
+            context_summary = self.context_analyzer.get_context_summary(context)
+            print(f"Job {job_id}: Context - {context_summary}")
+
             # Update status: applying rules
-            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 30)
+            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 35)
 
-            # 2. Apply deterministic rules
-            rule_redlines = self.rule_engine.apply_rules(working_text)
+            # 3. Apply deterministic rules (filtered by context)
+            all_rule_redlines = self.rule_engine.apply_rules(working_text)
 
-            print(f"Job {job_id}: Found {len(rule_redlines)} rule-based redlines")
+            # Filter rules based on context
+            rule_redlines = [
+                r for r in all_rule_redlines
+                if self.context_analyzer.should_apply_rule(r, context)
+            ]
+
+            print(f"Job {job_id}: {len(rule_redlines)} of {len(all_rule_redlines)} rule-based redlines (after context filtering)")
 
             # Update status: analyzing
-            await self._update_status(status_callback, JobStatus.ANALYZING, 50)
+            await self._update_status(status_callback, JobStatus.ANALYZING, 55)
 
-            # 3. LLM analysis
+            # 4. LLM analysis
             llm_redlines = self.llm_orchestrator.analyze(working_text, rule_redlines)
 
             print(f"Job {job_id}: Found {len(llm_redlines)} LLM redlines")
@@ -89,18 +110,32 @@ class DocumentProcessor:
 
             print(f"Job {job_id}: {len(valid_redlines)} valid redlines after validation")
 
-            # Convert to RedlineModel objects
-            redline_models = self._convert_to_models(valid_redlines)
+            # 5. Optimize redlines (smart filtering)
+            await self._update_status(status_callback, JobStatus.GENERATING, 75)
+
+            optimized_redlines = self.optimizer.filter_redlines(
+                valid_redlines,
+                strategy=self.strategy,
+                context=context
+            )
+
+            # Calculate acceptance probability
+            acceptance_prob = self.optimizer.calculate_acceptance_probability(optimized_redlines)
+
+            print(f"Job {job_id}: Optimized to {len(optimized_redlines)} redlines (acceptance probability: {acceptance_prob:.0%})")
+
+            # Convert to RedlineModel objects (use optimized redlines)
+            redline_models = self._convert_to_models(optimized_redlines)
 
             # Update status: generating
-            await self._update_status(status_callback, JobStatus.GENERATING, 80)
+            await self._update_status(status_callback, JobStatus.GENERATING, 85)
 
-            # 4. Generate redlined document
+            # 6. Generate redlined document
             output_path = await self._generate_redlined_doc(
                 job_id,
                 doc,
                 indexer,
-                valid_redlines
+                optimized_redlines
             )
 
             # Update status: complete
@@ -110,11 +145,15 @@ class DocumentProcessor:
             result = {
                 'job_id': job_id,
                 'status': JobStatus.COMPLETE,
-                'total_redlines': len(valid_redlines),
+                'total_redlines': len(optimized_redlines),
+                'original_redline_count': len(valid_redlines),
                 'rule_redlines': len(rule_redlines),
                 'llm_redlines': len(llm_redlines),
                 'redlines': redline_models,
                 'output_path': str(output_path),
+                'context_summary': context_summary,
+                'acceptance_probability': acceptance_prob,
+                'strategy_used': self.strategy,
                 'llm_stats': self.llm_orchestrator.get_stats()
             }
 
