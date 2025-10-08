@@ -33,6 +33,73 @@ class RedlineSource(str, Enum):
     CLAUDE = "claude"
 
 
+class ProcessingStrategy(str, Enum):
+    """Strategy for processing aggressiveness"""
+    LIGHT = "light"  # 5 redlines max - only critical issues
+    BALANCED = "balanced"  # 15 redlines max - critical + high priority
+    AGGRESSIVE = "aggressive"  # 30 redlines max - all issues
+    COMPREHENSIVE = "comprehensive"  # 50+ redlines - for review only
+
+
+class DealSize(str, Enum):
+    """Deal size categories"""
+    SMALL = "small"  # <$10M
+    MEDIUM = "medium"  # $10-100M
+    LARGE = "large"  # $100M-1B
+    MEGA = "mega"  # >$1B
+
+
+class RelationshipType(str, Enum):
+    """Relationship with counterparty"""
+    NEW = "new"  # First time interaction
+    EXISTING = "existing"  # Ongoing relationship
+    STRATEGIC = "strategic"  # Key strategic partner
+    PORTFOLIO = "portfolio"  # Portfolio company
+
+
+class RiskTolerance(str, Enum):
+    """Risk tolerance for this deal"""
+    CONSERVATIVE = "conservative"  # Minimize all risks
+    MODERATE = "moderate"  # Balance risk and deal momentum
+    AGGRESSIVE = "aggressive"  # Prioritize deal closure
+
+
+class DealContext(BaseModel):
+    """Context about the deal to inform redlining strategy"""
+    deal_size: Optional[DealSize] = Field(None, description="Estimated deal size")
+    relationship_type: Optional[RelationshipType] = Field(None, description="Type of relationship with counterparty")
+    industry: Optional[str] = Field(None, description="Industry sector (e.g., technology, healthcare, manufacturing)")
+    risk_tolerance: Optional[RiskTolerance] = Field(RiskTolerance.MODERATE, description="Risk tolerance for this deal")
+    timeline_pressure: Optional[bool] = Field(False, description="Whether there is timeline pressure to close quickly")
+    notes: Optional[str] = Field(None, description="Additional context notes")
+
+    def get_recommended_strategy(self) -> ProcessingStrategy:
+        """Recommend processing strategy based on context"""
+
+        # High-value deals or strategic relationships -> more thorough
+        if self.deal_size in [DealSize.LARGE, DealSize.MEGA]:
+            return ProcessingStrategy.BALANCED
+
+        # Strategic partners -> lighter touch
+        if self.relationship_type == RelationshipType.STRATEGIC:
+            return ProcessingStrategy.LIGHT
+
+        # Timeline pressure -> lighter touch
+        if self.timeline_pressure:
+            return ProcessingStrategy.LIGHT
+
+        # Conservative risk tolerance -> more thorough
+        if self.risk_tolerance == RiskTolerance.CONSERVATIVE:
+            return ProcessingStrategy.AGGRESSIVE
+
+        # Aggressive risk tolerance -> lighter touch
+        if self.risk_tolerance == RiskTolerance.AGGRESSIVE:
+            return ProcessingStrategy.LIGHT
+
+        # Default to balanced
+        return ProcessingStrategy.BALANCED
+
+
 class RedlineModel(BaseModel):
     """A single redline/track change"""
     id: str = Field(description="Unique redline ID")
@@ -70,12 +137,19 @@ class JobInfo(BaseModel):
     output_path: Optional[str] = None
 
 
+class UploadRequest(BaseModel):
+    """Request for document upload with optional context"""
+    deal_context: Optional[DealContext] = Field(None, description="Optional deal context to inform redlining strategy")
+    strategy_override: Optional[ProcessingStrategy] = Field(None, description="Optional strategy override (overrides context-based recommendation)")
+
+
 class UploadResponse(BaseModel):
     """Response from document upload"""
     job_id: str
     filename: str
     status: str
     message: str
+    strategy_used: Optional[ProcessingStrategy] = Field(None, description="Strategy that will be used for processing")
 
 
 class RedlineDecision(BaseModel):
