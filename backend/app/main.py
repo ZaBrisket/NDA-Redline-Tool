@@ -1,10 +1,17 @@
 """
 FastAPI backend for NDA automated redlining
 """
+import os
+from pathlib import Path
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(dotenv_path=env_path)
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
-from pathlib import Path
+from fastapi.responses import StreamingResponse, FileResponse, Response
 import uuid
 import asyncio
 import json
@@ -18,6 +25,16 @@ from .models.schemas import (
     ErrorResponse
 )
 from .workers.document_worker import job_queue
+from .api import batch
+from .core.telemetry import metrics_endpoint, get_performance_monitor
+from .middleware.security import (
+    SecurityMiddleware,
+    limiter,
+    apply_rate_limit,
+    validate_file_upload,
+    RateLimitExceeded,
+    _rate_limit_exceeded_handler
+)
 
 
 # Create FastAPI app
@@ -30,15 +47,25 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://nda-redline-tool.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:8000",
-    ],
+    allow_origins=["*"],  # Configure for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security middleware
+enable_api_keys = os.getenv("ENABLE_API_KEYS", "false").lower() == "true"
+app.add_middleware(SecurityMiddleware, enable_api_keys=enable_api_keys)
+
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Include batch API router
+app.include_router(batch.router)
+
+# Performance monitor
+monitor = get_performance_monitor()
 
 # Storage paths
 STORAGE_PATH = Path("./storage")
@@ -61,6 +88,8 @@ async def root():
 
 
 @app.post("/api/upload", response_model=UploadResponse)
+@apply_rate_limit("10 per minute")
+@validate_file_upload(max_size_mb=50)
 async def upload_document(file: UploadFile = File(...)):
     """
     Upload an NDA document for processing.
@@ -75,17 +104,6 @@ async def upload_document(file: UploadFile = File(...)):
                 detail="Only .docx files are supported"
             )
 
-        # Read file content
-        content = await file.read()
-
-        # Validate file size (50MB limit)
-        MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
-        if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large. Maximum size is {MAX_FILE_SIZE // 1024 // 1024}MB"
-            )
-
         # Generate job ID
         job_id = str(uuid.uuid4())
 
@@ -93,6 +111,7 @@ async def upload_document(file: UploadFile = File(...)):
         file_path = UPLOAD_PATH / f"{job_id}_{file.filename}"
 
         with file_path.open("wb") as f:
+            content = await file.read()
             f.write(content)
 
         # Submit to job queue
@@ -257,7 +276,7 @@ async def download_redlined(job_id: str, final: bool = False):
 
 @app.get("/api/stats")
 async def get_stats():
-    """Get processing statistics"""
+    """Get processing statistics with performance metrics"""
     # Aggregate stats from all jobs
     jobs = job_queue.jobs.values()
 
@@ -270,13 +289,23 @@ async def get_stats():
         if job.get('result'):
             total_redlines += job['result'].get('total_redlines', 0)
 
+    # Get performance metrics
+    perf_metrics = await monitor.get_metrics_summary()
+
     return {
         'total_documents': total,
         'successful': complete,
         'failed': error,
         'total_redlines': total_redlines,
-        'avg_redlines_per_doc': total_redlines / complete if complete > 0 else 0
+        'avg_redlines_per_doc': total_redlines / complete if complete > 0 else 0,
+        'performance': perf_metrics
     }
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Prometheus metrics endpoint"""
+    return await metrics_endpoint()
 
 
 @app.delete("/api/jobs/{job_id}")

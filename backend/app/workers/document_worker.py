@@ -1,7 +1,8 @@
 """
 Document processing worker
-Handles async NDA processing pipeline
+Handles async NDA processing pipeline with Redis queue support
 """
+import os
 import asyncio
 import json
 import uuid
@@ -14,11 +15,9 @@ from ..core.text_indexer import WorkingTextIndexer
 from ..core.rule_engine import RuleEngine
 from ..core.llm_orchestrator import LLMOrchestrator
 from ..core.docx_engine import TrackChangesEngine, RedlineValidator
-from ..core.context_analyzer import ContextualAnalyzer
-from ..core.reasonableness_scorer import ReasonablenessScorer
-from ..core.redline_optimizer import RedlineOptimizer
 from ..models.schemas import JobStatus, RedlineModel, RedlineSeverity, RedlineSource
 from ..models.checklist_rules import get_rule_explanation
+from .redis_job_queue import RedisJobQueue, JobPriority, JobStatus as RedisJobStatus
 
 
 class DocumentProcessor:
@@ -30,14 +29,10 @@ class DocumentProcessor:
     4. Generate redlined document
     """
 
-    def __init__(self, storage_path: str = "./storage", strategy: str = "balanced"):
+    def __init__(self, storage_path: str = "./storage"):
         self.storage_path = Path(storage_path)
         self.rule_engine = RuleEngine()
         self.llm_orchestrator = LLMOrchestrator()
-        self.context_analyzer = ContextualAnalyzer()
-        self.scorer = ReasonablenessScorer()
-        self.optimizer = RedlineOptimizer()
-        self.strategy = strategy  # 'light', 'balanced', or 'aggressive'
 
     async def process_document(
         self,
@@ -72,33 +67,19 @@ class DocumentProcessor:
             working_text_path.parent.mkdir(parents=True, exist_ok=True)
             working_text_path.write_text(working_text, encoding='utf-8')
 
-            # Update status: analyzing context
-            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 20)
-
-            # 2. Analyze existing document context
-            context = self.context_analyzer.analyze_existing_terms(working_text)
-            context_summary = self.context_analyzer.get_context_summary(context)
-            print(f"Job {job_id}: Context - {context_summary}")
-
             # Update status: applying rules
-            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 35)
+            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 30)
 
-            # 3. Apply deterministic rules (filtered by context)
-            all_rule_redlines = self.rule_engine.apply_rules(working_text)
+            # 2. Apply deterministic rules
+            rule_redlines = self.rule_engine.apply_rules(working_text)
 
-            # Filter rules based on context
-            rule_redlines = [
-                r for r in all_rule_redlines
-                if self.context_analyzer.should_apply_rule(r, context)
-            ]
-
-            print(f"Job {job_id}: {len(rule_redlines)} of {len(all_rule_redlines)} rule-based redlines (after context filtering)")
+            print(f"Job {job_id}: Found {len(rule_redlines)} rule-based redlines")
 
             # Update status: analyzing
-            await self._update_status(status_callback, JobStatus.ANALYZING, 55)
+            await self._update_status(status_callback, JobStatus.ANALYZING, 50)
 
-            # 4. LLM analysis
-            llm_redlines = self.llm_orchestrator.analyze(working_text, rule_redlines)
+            # 3. LLM analysis (now async)
+            llm_redlines = await self.llm_orchestrator.analyze(working_text, rule_redlines)
 
             print(f"Job {job_id}: Found {len(llm_redlines)} LLM redlines")
 
@@ -110,32 +91,18 @@ class DocumentProcessor:
 
             print(f"Job {job_id}: {len(valid_redlines)} valid redlines after validation")
 
-            # 5. Optimize redlines (smart filtering)
-            await self._update_status(status_callback, JobStatus.GENERATING, 75)
-
-            optimized_redlines = self.optimizer.filter_redlines(
-                valid_redlines,
-                strategy=self.strategy,
-                context=context
-            )
-
-            # Calculate acceptance probability
-            acceptance_prob = self.optimizer.calculate_acceptance_probability(optimized_redlines)
-
-            print(f"Job {job_id}: Optimized to {len(optimized_redlines)} redlines (acceptance probability: {acceptance_prob:.0%})")
-
-            # Convert to RedlineModel objects (use optimized redlines)
-            redline_models = self._convert_to_models(optimized_redlines)
+            # Convert to RedlineModel objects
+            redline_models = self._convert_to_models(valid_redlines)
 
             # Update status: generating
-            await self._update_status(status_callback, JobStatus.GENERATING, 85)
+            await self._update_status(status_callback, JobStatus.GENERATING, 80)
 
-            # 6. Generate redlined document
+            # 4. Generate redlined document
             output_path = await self._generate_redlined_doc(
                 job_id,
                 doc,
                 indexer,
-                optimized_redlines
+                valid_redlines
             )
 
             # Update status: complete
@@ -145,15 +112,11 @@ class DocumentProcessor:
             result = {
                 'job_id': job_id,
                 'status': JobStatus.COMPLETE,
-                'total_redlines': len(optimized_redlines),
-                'original_redline_count': len(valid_redlines),
+                'total_redlines': len(valid_redlines),
                 'rule_redlines': len(rule_redlines),
                 'llm_redlines': len(llm_redlines),
                 'redlines': redline_models,
                 'output_path': str(output_path),
-                'context_summary': context_summary,
-                'acceptance_probability': acceptance_prob,
-                'strategy_used': self.strategy,
                 'llm_stats': self.llm_orchestrator.get_stats()
             }
 
@@ -361,5 +324,253 @@ class JobQueue:
         return output_path
 
 
-# Global queue instance
-job_queue = JobQueue()
+class DistributedJobQueue:
+    """
+    Distributed job queue using Redis for horizontal scaling.
+    Provides backward compatibility with existing API while adding new features.
+    """
+
+    def __init__(self, use_redis: bool = None):
+        """
+        Initialize job queue (Redis or in-memory based on config).
+
+        Args:
+            use_redis: Force Redis usage (None = auto-detect from env)
+        """
+        self.processor = DocumentProcessor()
+
+        # Determine if Redis should be used
+        if use_redis is None:
+            use_redis = os.getenv("USE_REDIS_QUEUE", "false").lower() == "true"
+
+        self.use_redis = use_redis and os.getenv("REDIS_URL") is not None
+
+        if self.use_redis:
+            self.redis_queue = RedisJobQueue(redis_url=os.getenv("REDIS_URL"))
+            self.jobs = {}  # Local cache for backward compatibility
+            asyncio.create_task(self._init_redis())
+            asyncio.create_task(self._start_worker())
+        else:
+            # Fallback to in-memory queue
+            self.jobs: Dict[str, Dict] = {}
+            self.redis_queue = None
+
+    async def _init_redis(self):
+        """Initialize Redis connection."""
+        await self.redis_queue.connect()
+
+    async def _start_worker(self):
+        """Start Redis job consumer in background."""
+        if self.redis_queue:
+            asyncio.create_task(
+                self.redis_queue.consume_jobs(self._process_redis_job)
+            )
+
+    async def _process_redis_job(self, job_id: str, job_data: Dict) -> Dict:
+        """
+        Process job from Redis queue.
+
+        Args:
+            job_id: Job identifier
+            job_data: Job payload
+
+        Returns:
+            Processing result
+        """
+        file_path = job_data['file_path']
+
+        # Process document
+        result = await self.processor.process_document(
+            job_id,
+            file_path,
+            None  # Status updates handled via Redis
+        )
+
+        return result
+
+    async def submit_job(
+        self,
+        job_id: str,
+        file_path: str,
+        filename: str,
+        priority: str = "standard"
+    ) -> Dict:
+        """
+        Submit a new job to the queue.
+
+        Args:
+            job_id: Unique job identifier
+            file_path: Path to document
+            filename: Original filename
+            priority: Job priority level
+
+        Returns:
+            Job information
+        """
+        job_info = {
+            'job_id': job_id,
+            'filename': filename,
+            'file_path': file_path,
+            'status': JobStatus.QUEUED,
+            'progress': 0,
+            'created_at': datetime.now(),
+            'updated_at': datetime.now(),
+            'result': None
+        }
+
+        if self.use_redis:
+            # Submit to Redis queue
+            priority_level = {
+                'low': JobPriority.LOW,
+                'standard': JobPriority.STANDARD,
+                'expedited': JobPriority.EXPEDITED,
+                'critical': JobPriority.CRITICAL
+            }.get(priority.lower(), JobPriority.STANDARD)
+
+            await self.redis_queue.submit_job(
+                {
+                    'file_path': file_path,
+                    'filename': filename
+                },
+                priority=priority_level,
+                job_id=job_id
+            )
+
+            # Cache locally for backward compatibility
+            self.jobs[job_id] = job_info
+
+        else:
+            # Use in-memory queue
+            self.jobs[job_id] = job_info
+
+            # Process in background
+            asyncio.create_task(self._process_job(job_id, file_path))
+
+        return job_info
+
+    async def _process_job(self, job_id: str, file_path: str):
+        """Process job in-memory (fallback mode)."""
+        async def status_callback(update):
+            if job_id in self.jobs:
+                self.jobs[job_id].update(update)
+                self.jobs[job_id]['updated_at'] = datetime.now()
+
+        result = await self.processor.process_document(
+            job_id,
+            file_path,
+            status_callback
+        )
+
+        if job_id in self.jobs:
+            self.jobs[job_id]['result'] = result
+            self.jobs[job_id]['status'] = result.get('status', JobStatus.COMPLETE)
+
+    async def get_job_status(self, job_id: str) -> Optional[Dict]:
+        """
+        Get current job status.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            Job status information
+        """
+        if self.use_redis:
+            # Get from Redis
+            redis_status = await self.redis_queue.get_job_status(job_id)
+
+            if redis_status:
+                # Map Redis status to internal format
+                status_map = {
+                    RedisJobStatus.QUEUED.value: JobStatus.QUEUED,
+                    RedisJobStatus.PROCESSING.value: JobStatus.PROCESSING,
+                    RedisJobStatus.COMPLETED.value: JobStatus.COMPLETE,
+                    RedisJobStatus.FAILED.value: JobStatus.ERROR,
+                    RedisJobStatus.RETRYING.value: JobStatus.PROCESSING
+                }
+
+                return {
+                    'job_id': job_id,
+                    'status': status_map.get(redis_status['status'], JobStatus.QUEUED),
+                    'progress': float(redis_status.get('progress', 0)),
+                    'created_at': redis_status.get('created_at'),
+                    'updated_at': redis_status.get('updated_at'),
+                    'result': redis_status.get('result'),
+                    'error': redis_status.get('error')
+                }
+
+            # Check local cache
+            return self.jobs.get(job_id)
+
+        else:
+            # In-memory mode
+            return self.jobs.get(job_id)
+
+    def update_redline_decision(self, job_id: str, redline_id: str, decision: str):
+        """Update user decision on a redline."""
+        if job_id in self.jobs and self.jobs[job_id]['result']:
+            redlines = self.jobs[job_id]['result'].get('redlines', [])
+            for redline in redlines:
+                if redline['id'] == redline_id:
+                    redline['user_decision'] = decision
+                    return True
+        return False
+
+    async def export_final_document(self, job_id: str) -> Optional[Path]:
+        """Export final document with only accepted changes."""
+        # Get job info
+        job_info = await self.get_job_status(job_id)
+
+        if not job_info or not job_info.get('result'):
+            return None
+
+        result = job_info['result']
+
+        # Filter to accepted redlines
+        all_redlines = result.get('redlines', [])
+        accepted = [r for r in all_redlines if r.get('user_decision') == 'accept']
+
+        # Re-generate with only accepted changes
+        file_path = self.jobs[job_id]['file_path'] if job_id in self.jobs else None
+
+        if not file_path:
+            return None
+
+        doc = Document(file_path)
+
+        indexer = WorkingTextIndexer()
+        indexer.build_index(doc)
+
+        # Convert back to dict format
+        accepted_dicts = [{
+            'start': r['start'],
+            'end': r['end'],
+            'original_text': r['original_text'],
+            'revised_text': r['revised_text']
+        } for r in accepted]
+
+        engine = TrackChangesEngine(author="ndaOK")
+        engine.enable_track_changes(doc)
+        engine.apply_all_redlines(doc, indexer, accepted_dicts)
+
+        output_path = Path("./storage/exports") / f"{job_id}_final.docx"
+        doc.save(str(output_path))
+
+        return output_path
+
+    async def get_queue_stats(self) -> Dict:
+        """Get queue statistics."""
+        if self.use_redis:
+            return await self.redis_queue.get_queue_stats()
+        else:
+            return {
+                'total_jobs': len(self.jobs),
+                'queued': sum(1 for j in self.jobs.values() if j['status'] == JobStatus.QUEUED),
+                'processing': sum(1 for j in self.jobs.values() if j['status'] == JobStatus.PROCESSING),
+                'completed': sum(1 for j in self.jobs.values() if j['status'] == JobStatus.COMPLETE),
+                'failed': sum(1 for j in self.jobs.values() if j['status'] == JobStatus.ERROR)
+            }
+
+
+# Global queue instance - automatically uses Redis if configured
+job_queue = DistributedJobQueue()

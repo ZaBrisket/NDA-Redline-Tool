@@ -1,0 +1,105 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+ENV/
+env/
+
+# Storage (uploaded files and generated documents)
+storage/uploads/*
+storage/working/*
+storage/exports/*
+# Keep directory structure
+!storage/uploads/.gitkeep
+!storage/working/.gitkeep
+!storage/exports/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Node modules
+node_modules/
+.next/
+out/
+
+# Redis and cache files
+redis_data/
+*.rdb
+*.aof
+storage/cache/
+*.faiss
+*.pkl
+*.pickle
+
+# Audit logs and monitoring
+logs/
+*.log
+metrics/
+prometheus_data/
+
+# Test documents
+test_*.docx
+sample_*.docx
+*.test.docx
+
+# Batch processing temp files
+storage/batches/
+batch_temp/
+
+# Docker volumes
+docker-volumes/
+
+# Performance profiling
+*.prof
+*.stats
+
+# API keys and secrets
+*.pem
+*.key
+*.crt
+*.pfx
