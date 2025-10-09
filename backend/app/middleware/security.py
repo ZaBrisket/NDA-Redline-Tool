@@ -14,7 +14,7 @@ try:
 except ImportError:
     HAS_MAGIC = False
 import uuid
-from typing import Dict, Optional, List, Any, Set
+from typing import Dict, Optional, List, Any, Set, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
