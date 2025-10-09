@@ -12,13 +12,14 @@ echo
 # Install backend dependencies if needed
 echo "Installing backend dependencies..."
 cd backend
-pip install -r requirements.txt
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
 
 # Validate environment before starting
 echo
 echo "Validating environment configuration..."
 cd ..
-python validate_env.py
+python3 validate_env.py
 if [ $? -ne 0 ]; then
     echo "Environment validation failed. Please check your configuration."
     exit 1
@@ -59,6 +60,6 @@ echo
 
 echo "Starting backend server on port $PORT..."
 # Use uvicorn directly for Railway deployment
-python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --log-level info
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --log-level info
 
 echo "Server started successfully!"
