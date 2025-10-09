@@ -9,23 +9,6 @@ echo "Service: ${RAILWAY_SERVICE_NAME}"
 echo "============================================"
 echo
 
-# Install backend dependencies if needed
-echo "Installing backend dependencies..."
-cd backend
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
-
-# Validate environment before starting
-echo
-echo "Validating environment configuration..."
-cd ..
-python3 validate_env.py
-if [ $? -ne 0 ]; then
-    echo "Environment validation failed. Please check your configuration."
-    exit 1
-fi
-cd backend
-
 # Set default environment variables for Railway if not present
 export PORT=${PORT:-8000}
 export PYTHONUNBUFFERED=1
@@ -41,6 +24,7 @@ fi
 
 # Create necessary directories
 echo "Creating storage directories..."
+cd backend
 mkdir -p storage/uploads
 mkdir -p storage/processed
 mkdir -p storage/cache
@@ -61,5 +45,3 @@ echo
 echo "Starting backend server on port $PORT..."
 # Use uvicorn directly for Railway deployment
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --log-level info
-
-echo "Server started successfully!"

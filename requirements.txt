@@ -1,0 +1,35 @@
+# Core framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.6
+python-multipart==0.0.20
+python-dotenv==1.0.1
+
+# Document processing
+python-docx==1.2.0
+lxml==6.0.2
+pyyaml==6.0.2
+
+# LLM APIs
+openai==1.59.7
+anthropic==0.45.1
+
+# Caching and similarity search
+redis==5.0.1
+sentence-transformers==2.3.1
+faiss-cpu>=1.9.0
+numpy>=1.24.0
+
+# Performance monitoring
+prometheus-client==0.19.0
+
+# Security
+python-magic==0.4.27
+slowapi==0.1.9
+
+# Batch processing
+sse-starlette==2.0.0
+aiofiles==23.2.1
+
+# Optional: For better async support
+# asyncio is built-in to Python 3.7+
