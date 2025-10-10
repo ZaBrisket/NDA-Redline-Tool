@@ -8,6 +8,7 @@ import time
 import hashlib
 import logging
 import json
+import asyncio
 try:
     import magic
     HAS_MAGIC = True
