@@ -13,14 +13,46 @@ import asyncio
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
-import numpy as np
-import faiss
-import pickle
-from sentence_transformers import SentenceTransformer
-import redis.asyncio as redis
 from functools import lru_cache
 
+# Lazy imports for heavy dependencies (prevents import-time crashes)
+# These will be imported when the cache is actually instantiated
+numpy = None
+faiss = None
+SentenceTransformer = None
+redis = None
+
 logger = logging.getLogger(__name__)
+
+def _lazy_import_dependencies():
+    """Import heavy dependencies lazily to prevent startup crashes."""
+    global numpy, faiss, SentenceTransformer, redis
+
+    if numpy is not None:
+        return True  # Already imported
+
+    try:
+        import numpy as np
+        globals()['numpy'] = np
+
+        import faiss as faiss_module
+        globals()['faiss'] = faiss_module
+
+        from sentence_transformers import SentenceTransformer as ST
+        globals()['SentenceTransformer'] = ST
+
+        import redis.asyncio as redis_async
+        globals()['redis'] = redis_async
+
+        logger.info("Successfully loaded semantic cache dependencies")
+        return True
+    except ImportError as e:
+        logger.warning(f"Could not load semantic cache dependencies: {e}")
+        logger.warning("Semantic cache will be disabled. App will run without caching.")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error loading semantic cache dependencies: {e}")
+        return False
 
 class SemanticCache:
     """
@@ -48,6 +80,7 @@ class SemanticCache:
             ttl_days: Time-to-live for cache entries in days
             dimension: Embedding dimension (384 for MiniLM)
         """
+        self.enabled = False  # Will be set to True if initialization succeeds
         self.model_name = model_name
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -56,25 +89,12 @@ class SemanticCache:
         self.ttl_seconds = ttl_days * 24 * 3600
         self.dimension = dimension
 
-        # Initialize sentence transformer
-        logger.info(f"Loading sentence transformer model: {model_name}")
-        self.encoder = SentenceTransformer(model_name)
-
-        # Initialize FAISS index for similarity search
-        self.index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
-        self.index = faiss.IndexIDMap(self.index)  # Add ID mapping
-
-        # Cache storage: ID -> (embedding, response, metadata)
+        # Initialize empty state
+        self.encoder = None
+        self.index = None
         self.cache_data: Dict[int, Dict[str, Any]] = {}
         self.next_id = 0
-
-        # Redis connection for distributed caching (optional)
         self.redis_client = None
-        if redis_url:
-            asyncio.create_task(self._init_redis(redis_url))
-
-        # Load existing cache from disk
-        self._load_cache()
 
         # Performance metrics
         self.stats = {
@@ -83,6 +103,35 @@ class SemanticCache:
             "total_cost_saved": 0.0,
             "avg_similarity": 0.0
         }
+
+        # Try to initialize dependencies
+        if not _lazy_import_dependencies():
+            logger.warning("Semantic cache dependencies not available - cache disabled")
+            return
+
+        try:
+            # Initialize sentence transformer
+            logger.info(f"Loading sentence transformer model: {model_name}")
+            self.encoder = SentenceTransformer(model_name)
+
+            # Initialize FAISS index for similarity search
+            self.index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
+            self.index = faiss.IndexIDMap(self.index)  # Add ID mapping
+
+            # Load existing cache from disk
+            self._load_cache()
+
+            # Redis connection for distributed caching (optional)
+            if redis_url:
+                asyncio.create_task(self._init_redis(redis_url))
+
+            self.enabled = True
+            logger.info("Semantic cache initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize semantic cache: {e}")
+            logger.warning("Continuing without semantic cache - LLM calls will not be cached")
+            self.enabled = False
 
     async def _init_redis(self, redis_url: str):
         """Initialize Redis connection for distributed caching."""
@@ -96,6 +145,9 @@ class SemanticCache:
 
     def _load_cache(self):
         """Load persisted cache from disk."""
+        if not self.enabled or faiss is None:
+            return
+
         index_path = self.cache_dir / "faiss.index"
         data_path = self.cache_dir / "cache_data.pkl"
 
@@ -106,6 +158,7 @@ class SemanticCache:
 
                 # Load cache data
                 with open(data_path, 'rb') as f:
+                    import pickle
                     cache_info = pickle.load(f)
                     self.cache_data = cache_info['data']
                     self.next_id = cache_info['next_id']
@@ -123,6 +176,9 @@ class SemanticCache:
 
     def _initialize_empty_cache(self):
         """Initialize empty cache structures."""
+        if faiss is None:
+            return
+
         self.index = faiss.IndexFlatIP(self.dimension)
         self.index = faiss.IndexIDMap(self.index)
         self.cache_data = {}
@@ -130,6 +186,9 @@ class SemanticCache:
 
     def _save_cache(self):
         """Persist cache to disk for durability."""
+        if not self.enabled or faiss is None:
+            return
+
         try:
             # Save FAISS index
             index_path = self.cache_dir / "faiss.index"
@@ -138,6 +197,7 @@ class SemanticCache:
             # Save cache data
             data_path = self.cache_dir / "cache_data.pkl"
             with open(data_path, 'wb') as f:
+                import pickle
                 pickle.dump({
                     'data': self.cache_data,
                     'next_id': self.next_id,
@@ -150,6 +210,9 @@ class SemanticCache:
 
     def _cleanup_expired(self):
         """Remove expired cache entries based on TTL."""
+        if not self.enabled or numpy is None:
+            return
+
         current_time = time.time()
         expired_ids = []
 
@@ -159,7 +222,7 @@ class SemanticCache:
 
         if expired_ids:
             # Remove from FAISS index
-            self.index.remove_ids(np.array(expired_ids, dtype=np.int64))
+            self.index.remove_ids(numpy.array(expired_ids, dtype=numpy.int64))
 
             # Remove from cache data
             for cache_id in expired_ids:
@@ -168,14 +231,17 @@ class SemanticCache:
             logger.info(f"Cleaned up {len(expired_ids)} expired cache entries")
             self._save_cache()
 
-    def _normalize_embedding(self, embedding: np.ndarray) -> np.ndarray:
+    def _normalize_embedding(self, embedding):
         """Normalize embedding for cosine similarity."""
-        norm = np.linalg.norm(embedding)
+        if numpy is None:
+            return embedding
+
+        norm = numpy.linalg.norm(embedding)
         if norm > 0:
             return embedding / norm
         return embedding
 
-    async def get_embedding(self, text: str) -> np.ndarray:
+    async def get_embedding(self, text: str):
         """
         Generate embedding for text using sentence transformer.
 
@@ -183,14 +249,18 @@ class SemanticCache:
             text: Input text to embed
 
         Returns:
-            Normalized embedding vector
+            Normalized embedding vector (numpy array if available)
         """
+        if not self.enabled or self.encoder is None:
+            return None
+
         # Use cached embedding if available in Redis
         if self.redis_client:
             try:
                 cache_key = f"embedding:{hashlib.md5(text.encode()).hexdigest()}"
                 cached = await self.redis_client.get(cache_key)
                 if cached:
+                    import pickle
                     return pickle.loads(cached)
             except Exception as e:
                 logger.debug(f"Redis embedding lookup failed: {e}")
@@ -202,6 +272,7 @@ class SemanticCache:
         # Cache in Redis if available
         if self.redis_client:
             try:
+                import pickle
                 cache_key = f"embedding:{hashlib.md5(text.encode()).hexdigest()}"
                 await self.redis_client.setex(
                     cache_key,
@@ -228,6 +299,10 @@ class SemanticCache:
         Returns:
             Cached response if similarity > threshold, None otherwise
         """
+        # If cache is disabled, always return None (cache miss)
+        if not self.enabled:
+            return None
+
         try:
             # Generate embedding for query
             query_embedding = await self.get_embedding(clause_text)
@@ -298,16 +373,23 @@ class SemanticCache:
             context: Optional context information
             cost: Estimated cost of the LLM call
         """
+        # If cache is disabled, do nothing
+        if not self.enabled:
+            return
+
         try:
             # Generate embedding
             embedding = await self.get_embedding(clause_text)
+            if embedding is None or numpy is None:
+                return
+
             embedding = embedding.reshape(1, -1).astype('float32')
 
             # Add to FAISS index
             cache_id = self.next_id
             self.next_id += 1
 
-            self.index.add_with_ids(embedding, np.array([cache_id], dtype=np.int64))
+            self.index.add_with_ids(embedding, numpy.array([cache_id], dtype=numpy.int64))
 
             # Store cache data
             self.cache_data[cache_id] = {
@@ -362,7 +444,8 @@ class SemanticCache:
             Dictionary with cache metrics
         """
         return {
-            'total_entries': len(self.cache_data),
+            'enabled': self.enabled,
+            'total_entries': len(self.cache_data) if self.enabled else 0,
             'hits': self.stats['hits'],
             'misses': self.stats['misses'],
             'hit_rate': self._get_hit_rate(),

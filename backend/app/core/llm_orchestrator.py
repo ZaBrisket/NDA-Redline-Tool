@@ -16,7 +16,18 @@ from ..prompts.master_prompt import (
     build_analysis_prompt,
     NDA_ANALYSIS_SCHEMA
 )
-from .semantic_cache import get_semantic_cache
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Import semantic cache with error handling
+try:
+    from .semantic_cache import get_semantic_cache
+    CACHE_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Semantic cache not available: {e}")
+    CACHE_AVAILABLE = False
+    get_semantic_cache = None
 
 
 class LLMOrchestrator:
@@ -38,9 +49,25 @@ class LLMOrchestrator:
         self.confidence_threshold = float(os.getenv("CONFIDENCE_THRESHOLD", "95"))
         self.use_prompt_caching = os.getenv("USE_PROMPT_CACHING", "true").lower() == "true"
 
-        # Initialize semantic cache
-        self.semantic_cache = get_semantic_cache(redis_url=os.getenv("REDIS_URL"))
-        self.enable_cache = os.getenv("ENABLE_SEMANTIC_CACHE", "true").lower() == "true"
+        # Initialize semantic cache with fallback
+        self.semantic_cache = None
+        self.enable_cache = False
+
+        if CACHE_AVAILABLE and os.getenv("ENABLE_SEMANTIC_CACHE", "true").lower() == "true":
+            try:
+                self.semantic_cache = get_semantic_cache(redis_url=os.getenv("REDIS_URL"))
+                self.enable_cache = self.semantic_cache.enabled if self.semantic_cache else False
+                if self.enable_cache:
+                    logger.info("Semantic cache initialized successfully")
+                else:
+                    logger.warning("Semantic cache disabled - running without cache")
+            except Exception as e:
+                logger.error(f"Failed to initialize semantic cache: {e}")
+                logger.warning("Continuing without semantic cache")
+                self.semantic_cache = None
+                self.enable_cache = False
+        else:
+            logger.info("Semantic cache disabled via configuration")
 
         # Stats
         self.stats = {

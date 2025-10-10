@@ -2,7 +2,16 @@
 FastAPI backend for NDA automated redlining
 """
 import os
+import sys
+import logging
 from pathlib import Path
+
+# Configure logging before any other imports
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -77,13 +86,108 @@ UPLOAD_PATH.mkdir(parents=True, exist_ok=True)
 EXPORT_PATH.mkdir(parents=True, exist_ok=True)
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Run startup checks and log system status"""
+    logger.info("="*60)
+    logger.info("NDA Automated Redlining - Starting Up")
+    logger.info("="*60)
+
+    # Check Python version
+    logger.info(f"Python version: {sys.version}")
+
+    # Check critical dependencies
+    try:
+        import sqlite3
+        logger.info(f"✓ SQLite3 module available (version: {sqlite3.sqlite_version})")
+    except ImportError as e:
+        logger.error(f"✗ SQLite3 module NOT available: {e}")
+        logger.warning("  Semantic cache will be disabled")
+
+    # Check optional dependencies
+    try:
+        import numpy
+        logger.info(f"✓ NumPy available (version: {numpy.__version__})")
+    except ImportError:
+        logger.warning("✗ NumPy NOT available - semantic cache disabled")
+
+    try:
+        import faiss
+        logger.info(f"✓ FAISS available")
+    except ImportError:
+        logger.warning("✗ FAISS NOT available - semantic cache disabled")
+
+    try:
+        from sentence_transformers import SentenceTransformer
+        logger.info(f"✓ SentenceTransformers available")
+    except ImportError as e:
+        logger.warning(f"✗ SentenceTransformers NOT available: {e}")
+
+    # Check environment variables
+    required_env_vars = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+    for var in required_env_vars:
+        if os.getenv(var):
+            logger.info(f"✓ {var} configured")
+        else:
+            logger.error(f"✗ {var} NOT configured")
+
+    # Log cache status
+    cache_enabled = os.getenv("ENABLE_SEMANTIC_CACHE", "true").lower() == "true"
+    logger.info(f"Semantic cache: {'enabled' if cache_enabled else 'disabled'} (via env)")
+
+    logger.info("="*60)
+    logger.info("Startup complete - Ready to accept requests")
+    logger.info("="*60)
+
+
 @app.get("/")
 async def root():
-    """Health check"""
+    """Health check with dependency status"""
+    # Check dependencies
+    dependencies_status = {}
+
+    try:
+        import sqlite3
+        dependencies_status['sqlite3'] = {'available': True, 'version': sqlite3.sqlite_version}
+    except ImportError:
+        dependencies_status['sqlite3'] = {'available': False, 'error': 'Import failed'}
+
+    try:
+        import numpy
+        dependencies_status['numpy'] = {'available': True, 'version': numpy.__version__}
+    except ImportError:
+        dependencies_status['numpy'] = {'available': False}
+
+    try:
+        import faiss
+        dependencies_status['faiss'] = {'available': True}
+    except ImportError:
+        dependencies_status['faiss'] = {'available': False}
+
+    try:
+        from sentence_transformers import SentenceTransformer
+        dependencies_status['sentence_transformers'] = {'available': True}
+    except ImportError:
+        dependencies_status['sentence_transformers'] = {'available': False}
+
+    # Check if cache is enabled
+    cache_enabled = False
+    try:
+        from .core.semantic_cache import get_semantic_cache
+        cache = get_semantic_cache()
+        cache_enabled = cache.enabled if cache else False
+    except:
+        pass
+
     return {
         "service": "NDA Automated Redlining",
         "version": "1.0.0",
-        "status": "operational"
+        "status": "operational",
+        "cache_enabled": cache_enabled,
+        "dependencies": dependencies_status,
+        "warnings": [
+            "Semantic cache disabled - LLM costs will be higher"
+        ] if not cache_enabled else []
     }
 
 

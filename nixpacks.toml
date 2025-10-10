@@ -1,8 +1,16 @@
 [phases.setup]
-aptPkgs = ["sqlite3", "libsqlite3-dev"]
+# Install SQLite3 system dependencies for Python sqlite3 module
+aptPkgs = ["sqlite3", "libsqlite3-dev", "libsqlite3-0"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = [
+    "pip install --upgrade pip",
+    "pip install -r requirements.txt --no-cache-dir"
+]
 
 [start]
 cmd = "uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT"
+
+[variables]
+# Ensure SQLite3 library is in the path
+LD_LIBRARY_PATH = "/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
