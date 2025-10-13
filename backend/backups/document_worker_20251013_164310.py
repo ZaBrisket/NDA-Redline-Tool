@@ -6,9 +6,6 @@ import os
 import asyncio
 import json
 import uuid
-import gc  # Added for garbage collection
-import aiofiles  # Added for async file operations
-from concurrent.futures import ThreadPoolExecutor  # Added for CPU-bound operations
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -21,9 +18,6 @@ from ..core.docx_engine import TrackChangesEngine, RedlineValidator
 from ..models.schemas import JobStatus, RedlineModel, RedlineSeverity, RedlineSource
 from ..models.checklist_rules import get_rule_explanation
 from .redis_job_queue import RedisJobQueue, JobPriority, JobStatus as RedisJobStatus
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -39,8 +33,6 @@ class DocumentProcessor:
         self.storage_path = Path(storage_path)
         self.rule_engine = RuleEngine()
         self.llm_orchestrator = LLMOrchestrator()
-        # Thread pool for CPU-bound operations
-        self.executor = ThreadPoolExecutor(max_workers=4)
 
     async def process_document(
         self,
@@ -63,28 +55,17 @@ class DocumentProcessor:
             # Update status: parsing
             await self._update_status(status_callback, JobStatus.PARSING, 10)
 
-            # 1. Parse DOCX - OPTIMIZED: Offload CPU-bound parsing to thread pool
-            loop = asyncio.get_running_loop()
+            # 1. Parse DOCX
+            doc = Document(file_path)
+            indexer = WorkingTextIndexer()
+            indexer.build_index(doc)
 
-            # Define CPU-bound operation
-            def parse_document_sync(path):
-                doc = Document(path)
-                indexer = WorkingTextIndexer()
-                indexer.build_index(doc)
-                return doc, indexer, indexer.working_text
+            working_text = indexer.working_text
 
-            # Run in thread pool to avoid blocking event loop
-            doc, indexer, working_text = await loop.run_in_executor(
-                self.executor,
-                parse_document_sync,
-                file_path
-            )
-
-            # Save working text for debugging - OPTIMIZED with async I/O
+            # Save working text for debugging
             working_text_path = self.storage_path / "working" / f"{job_id}.txt"
             working_text_path.parent.mkdir(parents=True, exist_ok=True)
-            async with aiofiles.open(working_text_path, 'w', encoding='utf-8') as f:
-                await f.write(working_text)
+            working_text_path.write_text(working_text, encoding='utf-8')
 
             # Update status: applying rules
             await self._update_status(status_callback, JobStatus.APPLYING_RULES, 30)
@@ -139,25 +120,9 @@ class DocumentProcessor:
                 'llm_stats': self.llm_orchestrator.get_stats()
             }
 
-            # Save result - OPTIMIZED with async I/O
+            # Save result
             result_path = self.storage_path / "working" / f"{job_id}_result.json"
-            async with aiofiles.open(result_path, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(result, default=str))
-
-            # MEMORY CLEANUP - Free up resources after processing
-            try:
-                # Clean up indexer (clears lxml DOM tree)
-                if hasattr(indexer, 'cleanup'):
-                    indexer.cleanup()
-
-                # Clear document reference
-                del doc
-                del indexer
-
-                # Force garbage collection
-                gc.collect()
-            except Exception as cleanup_error:
-                logger.warning(f"Cleanup error (non-critical): {cleanup_error}")
+            result_path.write_text(json.dumps(result, default=str), encoding='utf-8')
 
             return result
 

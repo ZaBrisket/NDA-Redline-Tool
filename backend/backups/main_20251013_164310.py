@@ -24,7 +24,6 @@ from fastapi.responses import StreamingResponse, FileResponse, Response
 import uuid
 import asyncio
 import json
-import aiofiles  # Added for async file operations
 from typing import Optional
 
 from .models.schemas import (
@@ -214,13 +213,12 @@ async def upload_document(file: UploadFile = File(...)):
         # Generate job ID
         job_id = str(uuid.uuid4())
 
-        # Save uploaded file - OPTIMIZED with async I/O
+        # Save uploaded file
         file_path = UPLOAD_PATH / f"{job_id}_{file.filename}"
 
-        # Use aiofiles for non-blocking file write
-        async with aiofiles.open(file_path, "wb") as f:
+        with file_path.open("wb") as f:
             content = await file.read()
-            await f.write(content)
+            f.write(content)
 
         # Submit to job queue
         await job_queue.submit_job(job_id, str(file_path), file.filename)

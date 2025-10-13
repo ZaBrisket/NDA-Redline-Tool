@@ -1,19 +1,15 @@
 """
-LLM Orchestrator - OPTIMIZED VERSION with Async Clients and Parallel Execution
-Performance improvements:
-- Async OpenAI and Anthropic clients
-- Parallel LLM calls with asyncio.gather()
-- Connection pooling for reduced latency
-- Non-blocking operations throughout
-Expected speedup: 1.8-2x for LLM operations, 10x for concurrent requests
+LLM Orchestrator - GPT-5 analysis with Claude validation
+Handles non-deterministic pattern detection with cross-validation
+Integrated with semantic cache for 60% cost reduction
 """
 import os
 import json
 import random
 import asyncio
 from typing import List, Dict, Optional
-from openai import AsyncOpenAI  # Changed to async client
-from anthropic import AsyncAnthropic  # Changed to async client
+from openai import OpenAI
+from anthropic import Anthropic
 
 from ..prompts.master_prompt import (
     EDGEWATER_NDA_CHECKLIST,
@@ -36,34 +32,25 @@ except ImportError as e:
 
 class LLMOrchestrator:
     """
-    Orchestrate LLM analysis with validation - OPTIMIZED VERSION.
+    Orchestrate LLM analysis with validation.
 
-    Key optimizations:
-    1. Async clients with connection pooling
-    2. Parallel execution of OpenAI and Anthropic calls
-    3. Non-blocking throughout the pipeline
+    Flow:
+    1. GPT-5 with structured output for initial analysis
+    2. Claude validation for low-confidence or sampled redlines
+    3. Conflict resolution
     """
 
     def __init__(self):
-        # Initialize ASYNC clients with connection pooling
         openai_api_key = os.getenv("OPENAI_API_KEY")
         if openai_api_key:
-            self.openai_client = AsyncOpenAI(
-                api_key=openai_api_key,
-                max_retries=3,
-                timeout=30.0
-            )
+            self.openai_client = OpenAI(api_key=openai_api_key)
         else:
             self.openai_client = None
             logger.warning("OPENAI_API_KEY not configured; GPT-5 analysis disabled")
 
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         if anthropic_api_key:
-            self.anthropic_client = AsyncAnthropic(
-                api_key=anthropic_api_key,
-                max_retries=3,
-                timeout=30.0
-            )
+            self.anthropic_client = Anthropic(api_key=anthropic_api_key)
         else:
             self.anthropic_client = None
             logger.warning("ANTHROPIC_API_KEY not configured; Claude validation disabled")
@@ -107,47 +94,70 @@ class LLMOrchestrator:
     async def analyze(self, working_text: str, rule_redlines: List[Dict]) -> List[Dict]:
         """
         Analyze document with LLM, using semantic cache for similar clauses.
-        OPTIMIZED: All operations are truly async.
+
+        Args:
+            working_text: Normalized document text
+            rule_redlines: Redlines already applied by RuleEngine
+
+        Returns:
+            List of additional redlines found by LLM
         """
         # Build handled spans list
         handled_spans = [(r['start'], r['end']) for r in rule_redlines]
 
         # Split text into clauses for granular caching
         clauses = self._extract_clauses(working_text)
-
-        # Process clauses in parallel batches for better performance
-        batch_size = 5  # Process 5 clauses concurrently
         all_redlines = []
 
-        for i in range(0, len(clauses), batch_size):
-            batch = clauses[i:i+batch_size]
-            batch_tasks = []
+        for clause in clauses:
+            clause_text = clause['text']
+            clause_start = clause['start']
+            clause_end = clause['end']
 
-            for clause in batch:
-                clause_text = clause['text']
-                clause_start = clause['start']
-                clause_end = clause['end']
+            # Skip if already handled by rules
+            if any(cs <= clause_start < ce or cs < clause_end <= ce
+                   for cs, ce in handled_spans):
+                continue
 
-                # Skip if already handled by rules
-                if any(cs <= clause_start < ce or cs < clause_end <= ce
-                       for cs, ce in handled_spans):
-                    continue
-
-                # Create async task for each clause
-                batch_tasks.append(
-                    self._process_clause_async(
-                        clause_text, clause_start, working_text, handled_spans
-                    )
+            # Check semantic cache first
+            cached_result = None
+            if self.enable_cache:
+                cached_result = await self.semantic_cache.search(
+                    clause_text,
+                    context={'document_type': 'nda'}
                 )
 
-            # Process batch in parallel
-            if batch_tasks:
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                for result in batch_results:
-                    if isinstance(result, list):
-                        all_redlines.extend(result)
-                    elif isinstance(result, Exception):
-                        logger.error(f"Error processing clause: {result}")
+            if cached_result:
+                # Use cached response
+                self.stats['cache_hits'] += 1
+                self.stats['estimated_cost_saved'] += 0.03  # Estimated cost per clause
+
+                # Adjust positions for this document
+                cached_redlines = cached_result['response'].get('redlines', [])
+                for redline in cached_redlines:
+                    # Adjust positions relative to full document
+                    redline['start'] += clause_start
+                    redline['end'] += clause_start
+                    redline['cached'] = True
+                    redline['cache_similarity'] = cached_result['similarity']
+                    all_redlines.append(redline)
+            else:
+                # Analyze with LLM
+                self.stats['cache_misses'] += 1
+                clause_redlines = await self._analyze_clause_with_gpt5(
+                    clause_text, clause_start, working_text
+                )
+
+                # Store in cache for future use
+                if self.enable_cache and clause_redlines:
+                    await self.semantic_cache.store(
+                        clause_text,
+                        {'redlines': clause_redlines},
+                        context={'document_type': 'nda'},
+                        cost=0.03
+                    )
+
+                all_redlines.extend(clause_redlines)
 
         # Filter out redlines that overlap with rule-based ones
         all_redlines = self._filter_overlaps(all_redlines, handled_spans)
@@ -176,83 +186,14 @@ class LLMOrchestrator:
 
         return all_redlines
 
-    async def _process_clause_async(
-        self,
-        clause_text: str,
-        clause_start: int,
-        full_text: str,
-        handled_spans: List[tuple]
-    ) -> List[Dict]:
-        """
-        Process a single clause with caching and LLM analysis.
-        OPTIMIZED: Fully async operation.
-        """
-        # Check semantic cache first
-        cached_result = None
-        if self.enable_cache:
-            cached_result = await self.semantic_cache.search(
-                clause_text,
-                context={'document_type': 'nda'}
-            )
-
-        if cached_result:
-            # Use cached response
-            self.stats['cache_hits'] += 1
-            self.stats['estimated_cost_saved'] += 0.03
-
-            # Adjust positions for this document
-            cached_redlines = cached_result['response'].get('redlines', [])
-            for redline in cached_redlines:
-                redline['start'] += clause_start
-                redline['end'] += clause_start
-                redline['cached'] = True
-                redline['cache_similarity'] = cached_result['similarity']
-            return cached_redlines
-        else:
-            # Analyze with LLM
-            self.stats['cache_misses'] += 1
-            clause_redlines = await self._analyze_clause_with_gpt5_async(
-                clause_text, clause_start, full_text
-            )
-
-            # Store in cache for future use
-            if self.enable_cache and clause_redlines:
-                await self.semantic_cache.store(
-                    clause_text,
-                    {'redlines': clause_redlines},
-                    context={'document_type': 'nda'},
-                    cost=0.03
-                )
-
-            return clause_redlines
-
-    async def _analyze_clause_with_gpt5_async(
-        self,
-        clause_text: str,
-        clause_start: int,
-        full_text: str
-    ) -> List[Dict]:
-        """
-        Analyze a single clause with GPT-5.
-        OPTIMIZED: Truly async OpenAI call.
-        """
+    def _analyze_with_gpt5(self, working_text: str, handled_spans: List[tuple]) -> List[Dict]:
+        """Call GPT-5 with structured output"""
         if not self.openai_client:
-            logger.warning("OPENAI_API_KEY not configured; skipping GPT-5 clause analysis")
+            logger.warning("OPENAI_API_KEY not configured; skipping GPT-5 analysis")
             return []
 
         try:
-            # Build focused prompt for clause
-            prompt = f"""
-Analyze this specific clause from an NDA for Edgewater compliance issues:
-
-CLAUSE:
-{clause_text}
-
-CONTEXT: This is part of a larger NDA document. Focus only on issues within this specific clause.
-
-Identify any violations of the Edgewater NDA checklist and provide specific redlines.
-Return as JSON matching the schema.
-"""
+            prompt = build_analysis_prompt(working_text, handled_spans)
 
             messages = [
                 {
@@ -266,48 +207,41 @@ Return as JSON matching the schema.
             ]
 
             # Get model from environment
-            model = os.getenv("GPT_MODEL", "gpt-4")  # Note: Changed default to gpt-4
+            model = os.getenv("GPT_MODEL", "gpt-5")
 
-            # ASYNC OpenAI call - no longer blocks event loop
-            response = await self.openai_client.chat.completions.create(
+            # Use prompt caching if available (requires appropriate model)
+            response = self.openai_client.chat.completions.create(
                 model=model,
                 messages=messages,
                 response_format={
                     "type": "json_schema",
                     "json_schema": NDA_ANALYSIS_SCHEMA
                 },
-                temperature=0.1,
-                max_tokens=2000
+                temperature=0.1,  # Low temperature for consistency
+                max_tokens=4000
             )
 
-            self.stats['gpt_calls'] += 1
             result = json.loads(response.choices[0].message.content)
             violations = result.get('violations', [])
 
-            # Adjust positions and add metadata
+            # Add metadata
             for v in violations:
-                v['start'] = clause_start + v.get('start', 0)
-                v['end'] = clause_start + v.get('end', len(clause_text))
                 v['source'] = 'gpt5'
                 v['model'] = model
-                v['clause_analyzed'] = True
 
             return violations
 
         except Exception as e:
-            logger.error(f"GPT-5 clause analysis error: {e}")
+            print(f"GPT-5 analysis error: {e}")
             return []
 
-    async def _validate_with_claude_async(
+    def _validate_with_claude(
         self,
         working_text: str,
         redlines_to_validate: List[Dict],
         handled_spans: List[tuple]
     ) -> List[Dict]:
-        """
-        Validate specific redlines with Claude.
-        OPTIMIZED: Truly async Anthropic call.
-        """
+        """Validate specific redlines with Claude"""
         if not self.anthropic_client:
             logger.warning("ANTHROPIC_API_KEY not configured; skipping Claude validation")
             return []
@@ -345,9 +279,8 @@ Return as JSON matching the schema.
             if not self.use_prompt_caching:
                 messages[0]["content"][0].pop("cache_control", None)
 
-            # ASYNC Anthropic call - no longer blocks event loop
-            response = await self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",  # Using latest model
+            response = self.anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
                 max_tokens=4000,
                 temperature=0,
                 messages=messages
@@ -362,138 +295,10 @@ Return as JSON matching the schema.
             return validated
 
         except Exception as e:
-            logger.error(f"Claude validation error: {e}")
+            print(f"Claude validation error: {e}")
+            # On error, mark all as unvalidated
             return []
 
-    async def _analyze_with_dual_llm(
-        self,
-        working_text: str,
-        handled_spans: List[tuple]
-    ) -> List[Dict]:
-        """
-        Run OpenAI and Claude analysis in PARALLEL.
-        OPTIMIZED: Major speedup from parallel execution.
-        """
-        async def call_openai():
-            """Async OpenAI analysis"""
-            if not self.openai_client:
-                return []
-
-            try:
-                prompt = build_analysis_prompt(working_text, handled_spans)
-                messages = [
-                    {"role": "system", "content": EDGEWATER_NDA_CHECKLIST},
-                    {"role": "user", "content": prompt}
-                ]
-
-                model = os.getenv("GPT_MODEL", "gpt-4")
-
-                response = await self.openai_client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": NDA_ANALYSIS_SCHEMA
-                    },
-                    temperature=0.1,
-                    max_tokens=4000
-                )
-
-                result = json.loads(response.choices[0].message.content)
-                violations = result.get('violations', [])
-
-                for v in violations:
-                    v['source'] = 'openai'
-                    v['model'] = model
-
-                return violations
-
-            except Exception as e:
-                logger.error(f"OpenAI analysis error: {e}")
-                return []
-
-        async def call_claude():
-            """Async Claude analysis"""
-            if not self.anthropic_client:
-                return []
-
-            try:
-                prompt = build_analysis_prompt(working_text, handled_spans)
-
-                response = await self.anthropic_client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=4000,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-
-                # Parse Claude's response (may need JSON extraction)
-                response_text = response.content[0].text
-                violations = self._parse_claude_analysis(response_text)
-
-                for v in violations:
-                    v['source'] = 'anthropic'
-                    v['model'] = 'claude-3-5-sonnet'
-
-                return violations
-
-            except Exception as e:
-                logger.error(f"Claude analysis error: {e}")
-                return []
-
-        # PARALLEL EXECUTION - Key optimization!
-        # Both LLMs run simultaneously, time = max(openai_time, claude_time)
-        # Instead of sequential time = openai_time + claude_time
-        openai_results, claude_results = await asyncio.gather(
-            call_openai(),
-            call_claude()
-        )
-
-        # Merge and deduplicate results
-        all_results = openai_results + claude_results
-        return self._deduplicate_redlines(all_results)
-
-    def _deduplicate_redlines(self, redlines: List[Dict]) -> List[Dict]:
-        """Remove duplicate redlines from multiple sources"""
-        seen = set()
-        unique = []
-
-        for redline in redlines:
-            key = (redline['start'], redline['end'], redline.get('revised_text', ''))
-            if key not in seen:
-                seen.add(key)
-                unique.append(redline)
-
-        return unique
-
-    def _parse_claude_analysis(self, response_text: str) -> List[Dict]:
-        """Parse Claude's analysis response"""
-        try:
-            # Try to extract JSON if present
-            if '```json' in response_text:
-                json_start = response_text.find('```json') + 7
-                json_end = response_text.find('```', json_start)
-                json_text = response_text[json_start:json_end].strip()
-            elif '{' in response_text:
-                json_start = response_text.find('{')
-                json_end = response_text.rfind('}') + 1
-                json_text = response_text[json_start:json_end]
-            else:
-                return []
-
-            parsed = json.loads(json_text)
-
-            if 'violations' in parsed:
-                return parsed['violations']
-            elif isinstance(parsed, list):
-                return parsed
-            else:
-                return []
-
-        except Exception as e:
-            logger.error(f"Error parsing Claude analysis: {e}")
-            return []
-
-    # Keep all the existing helper methods unchanged
     def _select_for_validation(self, redlines: List[Dict]) -> List[Dict]:
         """Select which redlines need Claude validation"""
         needs_validation = []
@@ -656,7 +461,7 @@ Format: {{"validated_redlines": [...]}}
                 return []
 
         except Exception as e:
-            logger.error(f"Error parsing Claude validation: {e}")
+            print(f"Error parsing Claude validation: {e}")
             return []
 
     def get_stats(self) -> Dict:
@@ -666,10 +471,17 @@ Format: {{"validated_redlines": [...]}}
     def _extract_clauses(self, text: str) -> List[Dict]:
         """
         Extract individual clauses from document for granular caching.
+
+        Args:
+            text: Full document text
+
+        Returns:
+            List of clause dictionaries with text and positions
         """
         clauses = []
 
         # Split by common clause delimiters
+        # This is a simplified approach - can be enhanced with better NLP
         paragraphs = text.split('\n\n')
         current_position = 0
 
@@ -702,3 +514,111 @@ Format: {{"validated_redlines": [...]}}
             current_position += len(para) + 2
 
         return clauses
+
+    async def _analyze_clause_with_gpt5(
+        self,
+        clause_text: str,
+        clause_start: int,
+        full_text: str
+    ) -> List[Dict]:
+        """
+        Analyze a single clause with GPT-5.
+
+        Args:
+            clause_text: The clause to analyze
+            clause_start: Starting position in document
+            full_text: Full document for context
+
+        Returns:
+            List of redlines for this clause
+        """
+        if not self.openai_client:
+            logger.warning("OPENAI_API_KEY not configured; skipping GPT-5 clause analysis")
+            return []
+
+        try:
+            # Build focused prompt for clause
+            prompt = f"""
+Analyze this specific clause from an NDA for Edgewater compliance issues:
+
+CLAUSE:
+{clause_text}
+
+CONTEXT: This is part of a larger NDA document. Focus only on issues within this specific clause.
+
+Identify any violations of the Edgewater NDA checklist and provide specific redlines.
+Return as JSON matching the schema.
+"""
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": EDGEWATER_NDA_CHECKLIST
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+
+            # Get model from environment
+            model = os.getenv("GPT_MODEL", "gpt-5")
+
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": NDA_ANALYSIS_SCHEMA
+                },
+                temperature=0.1,
+                max_tokens=2000
+            )
+
+            self.stats['gpt_calls'] += 1
+            result = json.loads(response.choices[0].message.content)
+            violations = result.get('violations', [])
+
+            # Adjust positions and add metadata
+            for v in violations:
+                # Positions are relative to clause, adjust to document
+                v['start'] = clause_start + v.get('start', 0)
+                v['end'] = clause_start + v.get('end', len(clause_text))
+                v['source'] = 'gpt5'
+                v['model'] = model
+                v['clause_analyzed'] = True
+
+            return violations
+
+        except Exception as e:
+            print(f"GPT-5 clause analysis error: {e}")
+            return []
+
+    async def _validate_with_claude_async(
+        self,
+        working_text: str,
+        redlines_to_validate: List[Dict],
+        handled_spans: List[tuple]
+    ) -> List[Dict]:
+        """
+        Async version of Claude validation.
+
+        Args:
+            working_text: Full document text
+            redlines_to_validate: Redlines to validate
+            handled_spans: Already handled spans
+
+        Returns:
+            Validated redlines
+        """
+        # For now, wrap the sync method
+        # In production, would use async Anthropic client
+        return self._validate_with_claude(
+            working_text,
+            redlines_to_validate,
+            handled_spans
+        )
+
+
+
+

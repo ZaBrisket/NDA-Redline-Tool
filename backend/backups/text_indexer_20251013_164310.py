@@ -7,7 +7,6 @@ from docx.text.paragraph import Paragraph
 from docx.table import Table
 from typing import List, Dict, Tuple, Optional
 import re
-import gc  # Added for garbage collection
 
 
 class TextMapping:
@@ -237,29 +236,3 @@ class WorkingTextIndexer:
         for m in mappings:
             print(f"  - [{m.start}:{m.end}] p={m.p_idx} r={m.r_idx} type={m.element_type}")
             print(f"    Original: '{m.original}'")
-
-    def cleanup(self):
-        """
-        Clean up memory after processing - OPTIMIZED for memory efficiency.
-        Clears lxml DOM tree and internal data structures.
-        """
-        if self.doc:
-            try:
-                # Clear lxml element tree to free memory
-                if hasattr(self.doc, '_element'):
-                    self.doc._element.clear()
-                    # Clear parent references
-                    while hasattr(self.doc._element, 'getprevious') and self.doc._element.getprevious() is not None:
-                        del self.doc._element.getparent()[0]
-            except Exception:
-                pass  # Ignore cleanup errors
-
-            # Clear reference to document
-            self.doc = None
-
-        # Clear large data structures
-        self.working_text = ""
-        self.mappings = []
-
-        # Force garbage collection
-        gc.collect()
