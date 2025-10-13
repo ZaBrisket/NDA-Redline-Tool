@@ -450,6 +450,17 @@ def apply_rate_limit(rate: str = SecurityConfig.DEFAULT_RATE_LIMIT):
                     return func(request, *args, **kwargs)
                 return func(*args, **kwargs)
 
+        # Explicitly set the wrapper's signature to include 'request' parameter
+        # This ensures SlowAPI's introspection can detect it at import time
+        request_param = inspect.Parameter('request', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=Request)
+
+        # Get remaining parameters from original function
+        remaining_params = [p for p in sig.parameters.values() if p.name != 'request']
+
+        # Build new signature with request first, then original params
+        new_params = [request_param] + remaining_params
+        wrapper.__signature__ = inspect.Signature(parameters=new_params)
+
         # Apply SlowAPI AFTER we expose the 'request' param
         # This ensures SlowAPI sees a callable with a 'request' parameter
         return limiter.limit(rate)(wrapper)
