@@ -305,12 +305,15 @@ class TrackChangesEngine:
             settings = doc.settings
             settings_elem = settings.element
 
-            # Check if trackRevisions already exists
+            # The qn function returns the full namespace URI
+            # Format: {http://schemas.openxmlformats.org/wordprocessingml/2006/main}trackRevisions
             track_revisions = settings_elem.find(qn('w:trackRevisions'))
 
             if track_revisions is None:
-                # Add track changes setting
-                track_elem = parse_xml(f'<w:trackRevisions xmlns:w="{qn("w")}"/>')
+                # Create the trackRevisions element properly
+                # qn('w:trackRevisions') returns the full namespaced tag
+                from lxml import etree as ElementTree
+                track_elem = ElementTree.Element(qn('w:trackRevisions'))
                 settings_elem.append(track_elem)
 
         except Exception as e:
