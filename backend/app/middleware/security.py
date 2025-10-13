@@ -15,6 +15,7 @@ try:
 except ImportError:
     HAS_MAGIC = False
 import uuid
+import inspect
 from typing import Dict, Optional, List, Any, Set, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -32,9 +33,18 @@ import aiofiles
 logger = logging.getLogger(__name__)
 
 
+def real_ip(request: Request) -> str:
+    """
+    Extract real client IP from X-Forwarded-For header (for Railway/proxy environments).
+    Falls back to request.client.host if header not present.
+    """
+    xfwd = request.headers.get("x-forwarded-for")
+    return xfwd.split(",")[0].strip() if xfwd else (request.client.host if request.client else "unknown")
+
+
 # Rate limiter configuration
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=real_ip,
     default_limits=["100 per minute"],
     storage_uri=os.getenv("REDIS_URL", "memory://")
 )
@@ -407,15 +417,42 @@ def apply_rate_limit(rate: str = SecurityConfig.DEFAULT_RATE_LIMIT):
     """
     Decorator to apply rate limiting to endpoints.
 
+    Wraps FastAPI handlers while preserving a 'request' parameter in the callable
+    signature so SlowAPI can inspect it for rate-limit key computation. Works with
+    both sync and async handlers, whether or not they originally accept a request parameter.
+
     Args:
         rate: Rate limit string (e.g., "10 per minute")
     """
+    # Check if rate limiting is enabled
+    if not os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true":
+        def passthrough(f):
+            return f
+        return passthrough
+
     def decorator(func):
-        @wraps(func)
-        @limiter.limit(rate)
-        async def wrapper(*args, **kwargs):
-            return await func(*args, **kwargs)
-        return wrapper
+        sig = inspect.signature(func)
+        expects_request = "request" in sig.parameters
+
+        # Create wrapper that ALWAYS exposes 'request' parameter for SlowAPI
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def wrapper(request: Request, *args, **kwargs):
+                # Only pass request to the original function if it expects it
+                if expects_request:
+                    return await func(request, *args, **kwargs)
+                return await func(*args, **kwargs)
+        else:
+            @wraps(func)
+            def wrapper(request: Request, *args, **kwargs):
+                # Only pass request to the original function if it expects it
+                if expects_request:
+                    return func(request, *args, **kwargs)
+                return func(*args, **kwargs)
+
+        # Apply SlowAPI AFTER we expose the 'request' param
+        # This ensures SlowAPI sees a callable with a 'request' parameter
+        return limiter.limit(rate)(wrapper)
     return decorator
 
 
@@ -430,7 +467,16 @@ def validate_file_upload(max_size_mb: int = SecurityConfig.MAX_FILE_SIZE_MB):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             # Extract file from arguments
-            file = kwargs.get('file') or (args[1] if len(args) > 1 else None)
+            # Handle both cases: with and without request parameter injection
+            file = kwargs.get('file')
+
+            if not file and len(args) > 0:
+                # Check args - skip Request objects
+                for arg in args:
+                    # Import here to avoid circular imports
+                    if hasattr(arg, 'filename') and hasattr(arg, 'read'):
+                        file = arg
+                        break
 
             if file:
                 content = await file.read()
@@ -454,3 +500,5 @@ def validate_file_upload(max_size_mb: int = SecurityConfig.MAX_FILE_SIZE_MB):
 file_validator = FileValidator()
 api_key_manager = APIKeyManager()
 audit_logger = AuditLogger()
+
+
