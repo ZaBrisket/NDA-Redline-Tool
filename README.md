@@ -55,7 +55,7 @@ NDA Reviewer/
 ### Prerequisites
 
 - Python 3.10+
-- OpenAI API key (for GPT-4o/GPT-5)
+- OpenAI API key (for GPT-5)
 - Anthropic API key (for Claude validation)
 
 ### Installation

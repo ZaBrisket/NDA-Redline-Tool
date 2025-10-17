@@ -1,0 +1,20 @@
+NON-DISCLOSURE AGREEMENT
+This Non-Disclosure Agreement ("Agreement") is entered into as of January 1, 2025.
+BETWEEN:
+ABC Corporation, a company incorporated under the laws of Delaware ("Disclosing Party")
+AND:
+XYZ Inc., a company incorporated under the laws of California ("Receiving Party")
+1. Definition of Confidential Information
+Confidential Information means any and all information disclosed by the Disclosing Party to the Receiving Party, whether orally or in writing, that is designated as confidential or that reasonably should be understood to be confidential given the nature of the information and the circumstances of disclosure.
+2. Obligations
+The Receiving Party agrees to hold the Confidential Information in strict confidence and shall not disclose such information to any third parties without the prior written consent of the Disclosing Party. The Receiving Party shall indemnify and hold harmless the Disclosing Party from any and all claims, damages, losses, and expenses arising out of or relating to any breach of this Agreement.
+3. Term and Termination
+This Agreement shall remain in effect in perpetuity and the obligations hereunder shall survive indefinitely. The Receiving Party's obligations shall continue even after the termination of any business relationship between the parties.
+4. Non-Compete
+The Receiving Party agrees that during the term of this Agreement and for a period of 10 years thereafter, it shall not engage in any business that competes with the Disclosing Party anywhere in the world.
+5. Governing Law
+This Agreement shall be governed by and construed in accordance with the laws of the Cayman Islands, without regard to its conflict of law provisions.
+6. Dispute Resolution
+Any disputes arising under this Agreement shall be resolved exclusively by binding arbitration in the Cayman Islands. The prevailing party shall be entitled to recover all attorneys' fees and costs.
+7. Entire Agreement
+This Agreement constitutes the entire agreement between the parties and supersedes all prior agreements and understandings, whether written or oral.

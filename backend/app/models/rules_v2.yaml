@@ -1,0 +1,342 @@
+metadata:
+  version: "2.0.0"
+  enforcement_levels:
+    Bloody: ["critical", "high", "moderate", "low", "advisory"]
+    Balanced: ["critical", "high", "moderate"]
+    Lenient: ["critical"]
+
+rules:
+  # =====================================================
+  # CRITICAL RULES - Always enforced across all modes
+  # =====================================================
+
+  # TERM LIMITS - Critical violations
+  - id: term_perpetual_variants
+    pattern: '\b(perpetual|indefinite|unlimited|no\s+expir|evergreen|in\s+perpetuity|forever|everlasting|continuing\s+obligation|survives\s+indefinitely)\b'
+    severity: critical
+    action: replace
+    replacement: "for eighteen (18) months from the Effective Date"
+    enforcement_level: ["Bloody", "Balanced", "Lenient"]
+    explanation: "Remove perpetual/indefinite confidentiality terms"
+
+  - id: term_without_limit_clauses
+    pattern: '(without\s+(?:time\s+)?limit|no\s+(?:time\s+)?limitation|continues\s+until\s+terminated|shall\s+survive\s+(?:the\s+)?termination(?!\s+for))'
+    severity: critical
+    action: replace
+    replacement: "for a period of eighteen (18) months following termination"
+    enforcement_level: ["Bloody", "Balanced", "Lenient"]
+    explanation: "Replace unlimited duration with specific 18-month term"
+
+  - id: term_excessive_over_5_years
+    pattern: '((?:six|seven|eight|nine|ten|\d+)\s+(?:\(\d+\))?\s*years?|(?:60|72|84|96|108|120|\d{3,})\s*months?)'
+    severity: critical
+    action: replace
+    replacement: "twenty-four (24) months"
+    enforcement_level: ["Bloody", "Balanced", "Lenient"]
+    explanation: "Reduce excessive terms (>5 years) to 24 months"
+
+  # INDEMNIFICATION - Never accept
+  - id: indemnification_full_removal
+    pattern: '(shall\s+)?(?:indemnify|hold\s+harmless|defend).*?(?:from|against).*?(?:claim|loss|damage|liability|expense|cost)'
+    severity: critical
+    action: delete
+    enforcement_level: ["Bloody", "Balanced", "Lenient"]
+    explanation: "Remove all indemnification obligations"
+
+  - id: indemnification_disguised
+    pattern: '(?:reimburse|compensate|make\s+whole).*?(?:for\s+any|all).*?(?:loss|damage|cost|expense)'
+    severity: critical
+    action: delete
+    enforcement_level: ["Bloody", "Balanced", "Lenient"]
+    explanation: "Remove disguised indemnification language"
+
+  # =====================================================
+  # HIGH SEVERITY - Enforced in Bloody and Balanced
+  # =====================================================
+
+  # GOVERNING LAW MODIFICATIONS
+  - id: governing_law_foreign_jurisdiction
+    pattern: '(?:governed|construed).*?laws\s+of\s+(?!Delaware|New\s+York|California|Texas|Illinois|Massachusetts|United\s+States)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'
+    severity: high
+    action: replace
+    replacement: "governed by and construed in accordance with the laws of the State of Delaware"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Standardize foreign jurisdictions to Delaware law"
+
+  # DOCUMENT RETENTION CARVEOUTS
+  - id: retention_without_carveout
+    pattern: '(?:return|destroy).*?all.*?(?:Confidential\s+)?Information(?!.*?(?:legal|regulatory|archival|compliance))'
+    severity: high
+    action: add_after
+    addition: "Notwithstanding the foregoing, Recipient may retain copies as required for legal, regulatory, archival, or compliance purposes, subject to ongoing confidentiality obligations."
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Add legal/regulatory retention carveout"
+
+  - id: automatic_return_requirement
+    pattern: '(?:automatically|immediately|promptly)\s+(?:return|destroy)(?!\s+upon\s+(?:written\s+)?request)'
+    severity: high
+    action: replace
+    replacement: "upon written request, return or destroy"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Require written request for return/destruction"
+
+  # NON-SOLICITATION CARVEOUTS
+  - id: non_solicit_no_exceptions
+    pattern: 'shall\s+not.*?(?:solicit|hire|employ).*?employee(?!.*?(?:general\s+advertisement|unsolicited|terminated|laid\s+off))'
+    severity: high
+    action: add_after
+    addition: "provided that nothing herein shall prevent hiring: (i) through general advertising; (ii) employees who initiate contact; (iii) terminated employees; or (iv) after six months from last contact with Confidential Information."
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Add standard non-solicitation exceptions"
+
+  # COMPETITION RESTRICTIONS
+  - id: non_compete_broad
+    pattern: '(?:shall\s+not|prohibited\s+from|agree\s+not\s+to).*?(?:compete|competing\s+business|similar\s+business)'
+    severity: high
+    action: add_after
+    addition: "Nothing in this Agreement shall prevent Recipient from conducting its business in the ordinary course, including competing with Disclosing Party, provided Recipient does not use Confidential Information."
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Add competition safe harbor"
+
+  # INJUNCTIVE RELIEF
+  - id: injunctive_without_court
+    pattern: '(?:entitled|right)\s+to.*?injunctive\s+relief(?!.*?court.*?(?:determination|order|finding))'
+    severity: high
+    action: replace
+    replacement: "may seek injunctive relief upon determination by a court of competent jurisdiction"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Require court determination for injunctive relief"
+
+  # =====================================================
+  # MODERATE SEVERITY - Enforced in Bloody and Balanced
+  # =====================================================
+
+  # TERM ADJUSTMENTS
+  - id: term_suboptimal_25_36_months
+    pattern: '(twenty-five|thirty|thirty-six|25|30|36)\s*(?:\(\d+\))?\s*months?'
+    severity: moderate
+    action: replace
+    replacement: "twenty-four (24) months"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Standardize to 24-month term"
+
+  - id: term_3_year_standard
+    pattern: '(three|3)\s*(?:\(3\))?\s*years?'
+    severity: moderate
+    action: replace
+    replacement: "twenty-four (24) months"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Reduce 3-year 'market standard' to 24 months"
+
+  - id: term_4_5_years
+    pattern: '(four|five|4|5)\s*(?:\(\d\))?\s*years?'
+    severity: moderate
+    action: replace
+    replacement: "thirty (30) months"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Reduce 4-5 year terms to 30 months"
+
+  # REPRESENTATIONS AND WARRANTIES
+  - id: accuracy_warranty
+    pattern: '(?:represent|warrant).*?(?:accurate|complete|correct|true).*?Information'
+    severity: moderate
+    action: delete
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Remove accuracy warranties - information as-is"
+
+  - id: ownership_warranty
+    pattern: '(?:represent|warrant).*?(?:own|ownership|title|rights?\s+to).*?Information'
+    severity: moderate
+    action: delete
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Remove ownership warranties"
+
+  - id: no_violation_warranty
+    pattern: '(?:represent|warrant).*?(?:not\s+violate|no\s+breach|compliance\s+with).*?(?:agreement|law|obligation)'
+    severity: moderate
+    action: delete
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Remove non-violation warranties"
+
+  # AFFILIATES
+  - id: affiliate_inclusion
+    pattern: '\b(?:and|or|including)(?:\s+each\s+of)?\s+(?:its|their|our)\s+affiliates?\b'
+    severity: moderate
+    action: delete
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Remove affiliate inclusions - limit to named parties"
+
+  - id: subsidiary_parent_inclusion
+    pattern: '(?:subsidiaries|parent\s+compan|holding\s+compan|related\s+entit)'
+    severity: moderate
+    action: delete
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Remove subsidiary/parent references"
+
+  # ASSIGNMENT RESTRICTIONS
+  - id: no_assignment_allowed
+    pattern: 'may\s+not\s+(?:be\s+)?assign(?:ed)?.*?without.*?consent'
+    severity: moderate
+    action: replace
+    replacement: "may be assigned to affiliates or in connection with a merger, acquisition, or sale of substantially all assets"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Allow M&A assignment flexibility"
+
+  # VENUE/JURISDICTION
+  - id: exclusive_venue
+    pattern: 'exclusive(?:ly)?\s+(?:jurisdiction|venue).*?(?:court|County|District)'
+    severity: moderate
+    action: replace
+    replacement: "non-exclusive jurisdiction"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Make venue non-exclusive"
+
+  # =====================================================
+  # LOW SEVERITY - Enforced only in Bloody mode
+  # =====================================================
+
+  # LEGAL MODIFIERS
+  - id: best_efforts
+    pattern: '\bbest\s+efforts?\b'
+    severity: low
+    action: replace
+    replacement: "commercially reasonable efforts"
+    enforcement_level: ["Bloody"]
+    explanation: "Moderate effort standard"
+
+  - id: sole_absolute_discretion
+    pattern: '\b(?:sole|absolute|unfettered)\s+discretion\b'
+    severity: low
+    action: replace
+    replacement: "reasonable discretion"
+    enforcement_level: ["Bloody"]
+    explanation: "Require reasonableness in discretion"
+
+  - id: all_respects_language
+    pattern: '\bin\s+all\s+respects\b'
+    severity: low
+    action: replace
+    replacement: "in all material respects"
+    enforcement_level: ["Bloody"]
+    explanation: "Add materiality qualifier"
+
+  # MINOR TERM ADJUSTMENTS
+  - id: term_under_18_months
+    pattern: '(?:six|nine|twelve|6|9|12)\s*(?:\(\d+\))?\s*months?'
+    severity: low
+    action: replace
+    replacement: "eighteen (18) months"
+    enforcement_level: ["Bloody"]
+    explanation: "Increase short terms to 18-month minimum"
+
+  # BROKER/COMMISSION
+  - id: broker_language
+    pattern: '(?:broker|commission|finder.s\s+fee|referral\s+fee)'
+    severity: low
+    action: delete
+    enforcement_level: ["Bloody"]
+    explanation: "Remove broker/commission language"
+
+  # =====================================================
+  # ADVISORY - Style and formatting only in Bloody
+  # =====================================================
+
+  - id: formatting_inconsistency_caps
+    pattern: 'CONFIDENTIAL INFORMATION'
+    severity: advisory
+    action: suggest
+    suggestion: "Confidential Information"
+    enforcement_level: ["Bloody"]
+    explanation: "Standardize capitalization"
+
+  - id: formatting_inconsistency_lower
+    pattern: 'confidential information'
+    severity: advisory
+    action: suggest
+    suggestion: "Confidential Information"
+    enforcement_level: ["Bloody"]
+    explanation: "Standardize to title case"
+
+  - id: discloser_disclosing_party
+    pattern: '\bDiscloser\b'
+    severity: advisory
+    action: suggest
+    suggestion: "Disclosing Party"
+    enforcement_level: ["Bloody"]
+    explanation: "Standardize party naming"
+
+  - id: recipient_receiving_party
+    pattern: '\bReceiving Party\b'
+    severity: advisory
+    action: suggest
+    suggestion: "Recipient"
+    enforcement_level: ["Bloody"]
+    explanation: "Use shorter standard term"
+
+  - id: date_format_standardization
+    pattern: '(\d{1,2})[/-](\d{1,2})[/-](\d{4})'
+    severity: advisory
+    action: suggest
+    suggestion: "Month DD, YYYY"
+    enforcement_level: ["Bloody"]
+    explanation: "Standardize date format"
+
+  - id: number_format_consistency
+    pattern: '(\d+)\s+(?:months?|years?)(?!\s*\()'
+    severity: advisory
+    action: suggest
+    suggestion: "number (##) months/years"
+    enforcement_level: ["Bloody"]
+    explanation: "Add parenthetical number format"
+
+  # =====================================================
+  # SPECIAL PATTERN RULES
+  # =====================================================
+
+  # SURVIVAL CLAUSES
+  - id: survival_perpetual
+    pattern: 'shall\s+survive.*?(?:indefinitely|perpetually|without\s+limit)'
+    severity: critical
+    action: replace
+    replacement: "shall survive for eighteen (18) months"
+    enforcement_level: ["Bloody", "Balanced", "Lenient"]
+    explanation: "Limit survival period"
+
+  - id: obligations_continue_after
+    pattern: 'obligations.*?continue\s+after\s+(?:termination|expiration)(?!\s+for)'
+    severity: high
+    action: add_inline
+    addition: " for a period of eighteen (18) months"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Add specific continuation period"
+
+  # PURPOSE LIMITATIONS
+  - id: evaluation_only_restriction
+    pattern: 'solely\s+for\s+the\s+purpose\s+of\s+evaluating'
+    severity: moderate
+    action: replace
+    replacement: "for the purpose of evaluating"
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Remove 'solely' restriction"
+
+  - id: no_other_purpose
+    pattern: 'no\s+other\s+purpose\s+whatsoever'
+    severity: moderate
+    action: delete
+    enforcement_level: ["Bloody", "Balanced"]
+    explanation: "Remove overly restrictive purpose language"
+
+# Rule processing configuration
+processing:
+  # Order of rule application
+  order: ["critical", "high", "moderate", "low", "advisory"]
+
+  # Conflict resolution
+  conflicts:
+    strategy: "severity_first"  # Higher severity rules override lower
+
+  # Performance optimization
+  optimization:
+    cache_compiled_patterns: true
+    parallel_processing: true
+    batch_size: 10

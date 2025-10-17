@@ -98,11 +98,11 @@ class PerformanceMonitor:
         self.redis_url = redis_url or os.getenv("REDIS_URL")
         self.metrics_ttl = metrics_ttl
 
-        # Cost calculation parameters
+        # Cost calculation parameters (August 2025 pricing)
         self.cost_per_token = cost_per_token or {
-            'gpt-4o': 0.000005,  # $5 per 1M tokens
+            'gpt-5': 0.00000125,  # $1.25 per 1M input tokens
+            'gpt-5-output': 0.00001,  # $10 per 1M output tokens
             'claude-sonnet-4': 0.000003,  # $3 per 1M tokens
-            'gpt-4o-output': 0.000015,  # $15 per 1M output tokens
             'claude-sonnet-4-output': 0.000015  # $15 per 1M output tokens
         }
 

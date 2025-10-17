@@ -12,15 +12,28 @@ import asyncio
 from datetime import datetime
 import io
 
-from ..orchestrators.llm_pipeline import LLMPipelineOrchestrator
-from ..core.strictness_controller import EnforcementLevel
-from ..models.schemas_v2 import (
-    PipelineRequest,
-    PipelineResult,
-    BatchRequest,
-    BatchResult,
-    ExportRequest
-)
+try:
+    # Try absolute import for Railway deployment (running from root)
+    from backend.app.orchestrators.llm_pipeline import LLMPipelineOrchestrator
+    from backend.app.core.strictness_controller import EnforcementLevel
+    from backend.app.models.schemas_v2 import (
+        PipelineRequest,
+        PipelineResult,
+        BatchRequest,
+        BatchResult,
+        ExportRequest
+    )
+except ModuleNotFoundError:
+    # Fall back to relative imports for local development
+    from ..orchestrators.llm_pipeline import LLMPipelineOrchestrator
+    from ..core.strictness_controller import EnforcementLevel
+    from ..models.schemas_v2 import (
+        PipelineRequest,
+        PipelineResult,
+        BatchRequest,
+        BatchResult,
+        ExportRequest
+    )
 from docx import Document
 
 logger = logging.getLogger(__name__)
