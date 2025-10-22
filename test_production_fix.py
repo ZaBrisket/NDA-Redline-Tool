@@ -11,7 +11,7 @@ from pathlib import Path
 
 # Configuration
 FRONTEND_URL = "https://edgetoolspro.com"
-BACKEND_URL = "https://lucky-spirit-production.up.railway.app"  # Update this with actual Railway URL
+BACKEND_URL = "https://nda-redline-tool-production.up.railway.app"
 TEST_FILE = "test_nda.docx"
 
 def test_backend_health():

@@ -10,7 +10,7 @@ Go to Vercel Dashboard → Project Settings → Environment Variables
 
 **DELETE any existing `NEXT_PUBLIC_API_URL` and ADD:**
 ```
-NEXT_PUBLIC_API_URL = https://lucky-spirit-production.up.railway.app
+NEXT_PUBLIC_API_URL = https://nda-redline-tool-production.up.railway.app
 ```
 
 **IMPORTANT**:
@@ -42,10 +42,10 @@ RATE_LIMIT_REQUESTS_PER_MINUTE = 60
 
 ### 3. Verify Railway Backend URL
 1. Go to Railway Dashboard
-2. Click on your `lucky-spirit` project
-3. Go to Settings → Domains
-4. Copy the exact URL (it should be similar to `https://lucky-spirit-production.up.railway.app`)
-5. Use this EXACT URL in Vercel's `NEXT_PUBLIC_API_URL`
+2. Click on your project (ID: f0f0b42b-1a0e-412f-b626-44b21297f36a)
+3. Go to Networking → Public Networking
+4. Your URL is: `https://nda-redline-tool-production.up.railway.app` (Port 8080)
+5. This EXACT URL must be used in Vercel's `NEXT_PUBLIC_API_URL`
 
 ## Testing After Configuration
 
