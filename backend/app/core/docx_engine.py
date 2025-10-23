@@ -73,7 +73,10 @@ class TrackChangesEngine:
                 return True
 
         except Exception as e:
+            import traceback
             print(f"Error applying deletion: {e}")
+            print(f"Traceback: {traceback.format_exc()}")
+            # Log but don't fail the entire process for a single deletion error
             return False
 
         return False

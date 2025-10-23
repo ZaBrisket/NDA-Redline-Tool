@@ -249,7 +249,7 @@ async def upload_document(file: UploadFile = File(...)):
 @app.get("/api/jobs/{job_id}/status")
 async def get_job_status(job_id: str):
     """Get current status of a job"""
-    job = job_queue.get_job_status(job_id)
+    job = await job_queue.get_job_status(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -289,7 +289,7 @@ async def job_events(job_id: str):
         last_status = None
 
         while True:
-            job = job_queue.get_job_status(job_id)
+            job = await job_queue.get_job_status(job_id)
 
             if not job:
                 yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
@@ -339,7 +339,7 @@ async def submit_decisions(job_id: str, decisions: BatchDecision):
 
     Allows user to review and approve/reject each proposed change.
     """
-    job = job_queue.get_job_status(job_id)
+    job = await job_queue.get_job_status(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -363,7 +363,7 @@ async def download_redlined(job_id: str, final: bool = False):
     Args:
         final: If True, export with only accepted changes
     """
-    job = job_queue.get_job_status(job_id)
+    job = await job_queue.get_job_status(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -427,7 +427,7 @@ async def get_metrics():
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
     """Delete a job and its files"""
-    job = job_queue.get_job_status(job_id)
+    job = await job_queue.get_job_status(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
