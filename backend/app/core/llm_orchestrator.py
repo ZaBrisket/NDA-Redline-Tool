@@ -1,499 +1,358 @@
 """
-LLM Orchestrator - OPTIMIZED VERSION with Async Clients and Parallel Execution
-Performance improvements:
-- Async OpenAI and Anthropic clients
-- Parallel LLM calls with asyncio.gather()
-- Connection pooling for reduced latency
-- Non-blocking operations throughout
-Expected speedup: 1.8-2x for LLM operations, 10x for concurrent requests
+LLM Orchestrator - GPT-5 analysis with Claude validation
+Handles non-deterministic pattern detection with cross-validation
 """
 import os
 import json
 import random
-import asyncio
+import time
+import logging
+import re
+import threading
 from typing import List, Dict, Optional
-from openai import AsyncOpenAI  # Changed to async client
-from anthropic import AsyncAnthropic  # Changed to async client
+from openai import OpenAI, RateLimitError, APIConnectionError, APITimeoutError
+from anthropic import Anthropic, APIStatusError, APIConnectionError as AnthropicConnectionError
 
 from ..prompts.master_prompt import (
     EDGEWATER_NDA_CHECKLIST,
     build_analysis_prompt,
     NDA_ANALYSIS_SCHEMA
 )
-import logging
-
-logger = logging.getLogger(__name__)
-
-# Import semantic cache with error handling
-try:
-    from .semantic_cache import get_semantic_cache
-    CACHE_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Semantic cache not available: {e}")
-    CACHE_AVAILABLE = False
-    get_semantic_cache = None
 
 
 class LLMOrchestrator:
     """
-    Orchestrate LLM analysis with validation - OPTIMIZED VERSION.
+    Orchestrate LLM analysis with validation.
 
-    Key optimizations:
-    1. Async clients with connection pooling
-    2. Parallel execution of OpenAI and Anthropic calls
-    3. Non-blocking throughout the pipeline
+    Flow:
+    1. GPT-5 with structured output for initial analysis
+    2. Claude validation for low-confidence or sampled redlines
+    3. Conflict resolution
     """
 
-    def __init__(self):
-        # Initialize ASYNC clients with connection pooling
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if openai_api_key:
-            self.openai_client = AsyncOpenAI(
-                api_key=openai_api_key,
-                max_retries=3,
-                timeout=30.0
-            )
-        else:
-            self.openai_client = None
-            logger.warning("OPENAI_API_KEY not configured; GPT-5 analysis disabled")
+    # Class-level singleton clients for connection pooling
+    _openai_client = None
+    _anthropic_client = None
+    _client_lock = threading.Lock()  # Thread-safe client initialization
 
-        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-        if anthropic_api_key:
-            self.anthropic_client = AsyncAnthropic(
-                api_key=anthropic_api_key,
-                max_retries=3,
-                timeout=30.0
-            )
-        else:
-            self.anthropic_client = None
-            logger.warning("ANTHROPIC_API_KEY not configured; Claude validation disabled")
+    @classmethod
+    def get_openai_client(cls) -> OpenAI:
+        """Get or create singleton OpenAI client"""
+        if cls._openai_client is None:
+            with cls._client_lock:
+                # Double-check pattern for thread safety
+                if cls._openai_client is None:
+                    api_key = os.getenv("OPENAI_API_KEY")
+                    if not api_key:
+                        raise ValueError("OPENAI_API_KEY not set")
+
+                    cls._openai_client = OpenAI(
+                        api_key=api_key,
+                        timeout=30,  # 30 seconds timeout
+                        max_retries=0  # We handle retries manually
+                    )
+                    logging.getLogger(__name__).info("Initialized OpenAI client singleton")
+
+        return cls._openai_client
+
+    @classmethod
+    def get_anthropic_client(cls) -> Anthropic:
+        """Get or create singleton Anthropic client"""
+        if cls._anthropic_client is None:
+            with cls._client_lock:
+                # Double-check pattern for thread safety
+                if cls._anthropic_client is None:
+                    api_key = os.getenv("ANTHROPIC_API_KEY")
+                    if not api_key:
+                        raise ValueError("ANTHROPIC_API_KEY not set")
+
+                    cls._anthropic_client = Anthropic(
+                        api_key=api_key,
+                        timeout=30,  # 30 seconds timeout
+                        max_retries=0  # We handle retries manually
+                    )
+                    logging.getLogger(__name__).info("Initialized Anthropic client singleton")
+
+        return cls._anthropic_client
+
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+
+        # Initialize API clients using singletons
+        self.request_timeout = 30  # 30 seconds timeout
+        self.max_retries = 3
+        self.retry_delay = 1  # Initial delay in seconds
+
+        # Use singleton clients for connection pooling
+        self.openai_client = self.get_openai_client()
+        self.anthropic_client = self.get_anthropic_client()
 
         # Configuration
         self.validation_rate = float(os.getenv("VALIDATION_RATE", "0.15"))
         self.confidence_threshold = float(os.getenv("CONFIDENCE_THRESHOLD", "95"))
         self.use_prompt_caching = os.getenv("USE_PROMPT_CACHING", "true").lower() == "true"
 
-        # Initialize semantic cache with fallback
-        self.semantic_cache = None
-        self.enable_cache = False
+        # Pricing (as of Jan 2025)
+        self.GPT_INPUT_COST = 0.003 / 1000   # $0.003 per 1K input tokens
+        self.GPT_OUTPUT_COST = 0.006 / 1000  # $0.006 per 1K output tokens
+        self.CLAUDE_INPUT_COST = 0.003 / 1000  # $0.003 per 1K input tokens
+        self.CLAUDE_OUTPUT_COST = 0.015 / 1000  # $0.015 per 1K output tokens
 
-        if CACHE_AVAILABLE and os.getenv("ENABLE_SEMANTIC_CACHE", "true").lower() == "true":
-            try:
-                self.semantic_cache = get_semantic_cache(redis_url=os.getenv("REDIS_URL"))
-                self.enable_cache = self.semantic_cache.enabled if self.semantic_cache else False
-                if self.enable_cache:
-                    logger.info("Semantic cache initialized successfully")
-                else:
-                    logger.warning("Semantic cache disabled - running without cache")
-            except Exception as e:
-                logger.error(f"Failed to initialize semantic cache: {e}")
-                logger.warning("Continuing without semantic cache")
-                self.semantic_cache = None
-                self.enable_cache = False
-        else:
-            logger.info("Semantic cache disabled via configuration")
-
-        # Stats
+        # Stats with enhanced tracking
         self.stats = {
             'gpt_calls': 0,
+            'gpt_tokens_input': 0,
+            'gpt_tokens_output': 0,
+            'gpt_rate_limits': 0,
+            'gpt_timeouts': 0,
+            'gpt_errors': 0,
             'claude_calls': 0,
+            'claude_tokens_input': 0,
+            'claude_tokens_output': 0,
+            'claude_rate_limits': 0,
+            'claude_errors': 0,
             'validations': 0,
             'conflicts': 0,
-            'cache_hits': 0,
-            'cache_misses': 0,
-            'estimated_cost_saved': 0.0
+            'total_cost_usd': 0.0
         }
 
-    async def analyze(self, working_text: str, rule_redlines: List[Dict]) -> List[Dict]:
+    def analyze(self, working_text: str, rule_redlines: List[Dict]) -> List[Dict]:
         """
-        Analyze document with LLM, using semantic cache for similar clauses.
-        OPTIMIZED: All operations are truly async.
+        Analyze document with LLM, skipping already-handled spans.
+
+        Args:
+            working_text: Normalized document text
+            rule_redlines: Redlines already applied by RuleEngine
+
+        Returns:
+            List of additional redlines found by LLM
         """
         # Build handled spans list
         handled_spans = [(r['start'], r['end']) for r in rule_redlines]
 
-        # Split text into clauses for granular caching
-        clauses = self._extract_clauses(working_text)
-
-        # Process clauses in parallel batches for better performance
-        batch_size = 5  # Process 5 clauses concurrently
-        all_redlines = []
-
-        for i in range(0, len(clauses), batch_size):
-            batch = clauses[i:i+batch_size]
-            batch_tasks = []
-
-            for clause in batch:
-                clause_text = clause['text']
-                clause_start = clause['start']
-                clause_end = clause['end']
-
-                # Skip if already handled by rules
-                if any(cs <= clause_start < ce or cs < clause_end <= ce
-                       for cs, ce in handled_spans):
-                    continue
-
-                # Create async task for each clause
-                batch_tasks.append(
-                    self._process_clause_async(
-                        clause_text, clause_start, working_text, handled_spans
-                    )
-                )
-
-            # Process batch in parallel
-            if batch_tasks:
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                for result in batch_results:
-                    if isinstance(result, list):
-                        all_redlines.extend(result)
-                    elif isinstance(result, Exception):
-                        logger.error(f"Error processing clause: {result}")
+        # Call GPT-5
+        gpt_redlines = self._analyze_with_gpt5(working_text, handled_spans)
+        self.stats['gpt_calls'] += 1
 
         # Filter out redlines that overlap with rule-based ones
-        all_redlines = self._filter_overlaps(all_redlines, handled_spans)
+        gpt_redlines = self._filter_overlaps(gpt_redlines, handled_spans)
 
         # Validation logic
-        needs_validation = self._select_for_validation(all_redlines)
+        needs_validation = self._select_for_validation(gpt_redlines)
 
         if needs_validation:
-            validated = await self._validate_with_claude_async(
+            validated = self._validate_with_claude(
                 working_text,
                 needs_validation,
-                handled_spans + [(r['start'], r['end']) for r in all_redlines if r not in needs_validation]
+                handled_spans + [(r['start'], r['end']) for r in gpt_redlines if r not in needs_validation]
             )
 
             # Merge validated results
-            all_redlines = self._merge_validated_results(all_redlines, needs_validation, validated)
+            gpt_redlines = self._merge_validated_results(gpt_redlines, needs_validation, validated)
 
-        # Update cache statistics
-        if self.enable_cache:
-            cache_stats = self.semantic_cache.get_statistics()
-            self.stats.update({
-                'total_cache_entries': cache_stats['total_entries'],
-                'cache_hit_rate': cache_stats['hit_rate'],
-                'total_cost_saved': cache_stats['total_cost_saved']
-            })
+        return gpt_redlines
 
-        return all_redlines
+    def _analyze_with_gpt5(self, working_text: str, handled_spans: List[tuple]) -> List[Dict]:
+        """Call GPT-5 with structured output, retry logic, and cost tracking"""
+        prompt = build_analysis_prompt(working_text, handled_spans)
 
-    async def _process_clause_async(
-        self,
-        clause_text: str,
-        clause_start: int,
-        full_text: str,
-        handled_spans: List[tuple]
-    ) -> List[Dict]:
-        """
-        Process a single clause with caching and LLM analysis.
-        OPTIMIZED: Fully async operation.
-        """
-        # Check semantic cache first
-        cached_result = None
-        if self.enable_cache:
-            cached_result = await self.semantic_cache.search(
-                clause_text,
-                context={'document_type': 'nda'}
-            )
+        messages = [
+            {
+                "role": "system",
+                "content": EDGEWATER_NDA_CHECKLIST
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
 
-        if cached_result:
-            # Use cached response
-            self.stats['cache_hits'] += 1
-            self.stats['estimated_cost_saved'] += 0.03
-
-            # Adjust positions for this document
-            cached_redlines = cached_result['response'].get('redlines', [])
-            for redline in cached_redlines:
-                redline['start'] += clause_start
-                redline['end'] += clause_start
-                redline['cached'] = True
-                redline['cache_similarity'] = cached_result['similarity']
-            return cached_redlines
-        else:
-            # Analyze with LLM
-            self.stats['cache_misses'] += 1
-            clause_redlines = await self._analyze_clause_with_gpt5_async(
-                clause_text, clause_start, full_text
-            )
-
-            # Store in cache for future use
-            if self.enable_cache and clause_redlines:
-                await self.semantic_cache.store(
-                    clause_text,
-                    {'redlines': clause_redlines},
-                    context={'document_type': 'nda'},
-                    cost=0.03
-                )
-
-            return clause_redlines
-
-    async def _analyze_clause_with_gpt5_async(
-        self,
-        clause_text: str,
-        clause_start: int,
-        full_text: str
-    ) -> List[Dict]:
-        """
-        Analyze a single clause with GPT-5.
-        OPTIMIZED: Truly async OpenAI call.
-        """
-        if not self.openai_client:
-            logger.warning("OPENAI_API_KEY not configured; skipping GPT-5 clause analysis")
-            return []
-
-        try:
-            # Build focused prompt for clause
-            prompt = f"""
-Analyze this specific clause from an NDA for Edgewater compliance issues:
-
-CLAUSE:
-{clause_text}
-
-CONTEXT: This is part of a larger NDA document. Focus only on issues within this specific clause.
-
-Identify any violations of the Edgewater NDA checklist and provide specific redlines.
-Return as JSON matching the schema.
-"""
-
-            messages = [
-                {
-                    "role": "system",
-                    "content": EDGEWATER_NDA_CHECKLIST
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-
-            # Get model from environment
-            model = os.getenv("GPT_MODEL", "gpt-4")  # Note: Changed default to gpt-4
-
-            # ASYNC OpenAI call - no longer blocks event loop
-            response = await self.openai_client.chat.completions.create(
-                model=model,
-                messages=messages,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": NDA_ANALYSIS_SCHEMA
-                },
-                temperature=0.1,
-                max_tokens=2000
-            )
-
-            self.stats['gpt_calls'] += 1
-            result = json.loads(response.choices[0].message.content)
-            violations = result.get('violations', [])
-
-            # Adjust positions and add metadata
-            for v in violations:
-                v['start'] = clause_start + v.get('start', 0)
-                v['end'] = clause_start + v.get('end', len(clause_text))
-                v['source'] = 'gpt5'
-                v['model'] = model
-                v['clause_analyzed'] = True
-
-            return violations
-
-        except Exception as e:
-            logger.error(f"GPT-5 clause analysis error: {e}")
-            return []
-
-    async def _validate_with_claude_async(
-        self,
-        working_text: str,
-        redlines_to_validate: List[Dict],
-        handled_spans: List[tuple]
-    ) -> List[Dict]:
-        """
-        Validate specific redlines with Claude.
-        OPTIMIZED: Truly async Anthropic call.
-        """
-        if not self.anthropic_client:
-            logger.warning("ANTHROPIC_API_KEY not configured; skipping Claude validation")
-            return []
-
-        try:
-            self.stats['claude_calls'] += 1
-            self.stats['validations'] += len(redlines_to_validate)
-
-            # Build validation prompt
-            validation_prompt = self._build_validation_prompt(
-                working_text,
-                redlines_to_validate,
-                handled_spans
-            )
-
-            # Use prompt caching with Claude
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": EDGEWATER_NDA_CHECKLIST,
-                            "cache_control": {"type": "ephemeral"} if self.use_prompt_caching else None
-                        },
-                        {
-                            "type": "text",
-                            "text": validation_prompt
-                        }
-                    ]
-                }
-            ]
-
-            # Remove None cache_control if not using caching
-            if not self.use_prompt_caching:
-                messages[0]["content"][0].pop("cache_control", None)
-
-            # ASYNC Anthropic call - no longer blocks event loop
-            response = await self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",  # Using latest model
-                max_tokens=4000,
-                temperature=0,
-                messages=messages
-            )
-
-            # Parse response
-            response_text = response.content[0].text
-
-            # Extract JSON from response
-            validated = self._parse_claude_validation(response_text)
-
-            return validated
-
-        except Exception as e:
-            logger.error(f"Claude validation error: {e}")
-            return []
-
-    async def _analyze_with_dual_llm(
-        self,
-        working_text: str,
-        handled_spans: List[tuple]
-    ) -> List[Dict]:
-        """
-        Run OpenAI and Claude analysis in PARALLEL.
-        OPTIMIZED: Major speedup from parallel execution.
-        """
-        async def call_openai():
-            """Async OpenAI analysis"""
-            if not self.openai_client:
-                return []
-
+        # Retry logic with exponential backoff
+        for attempt in range(self.max_retries):
             try:
-                prompt = build_analysis_prompt(working_text, handled_spans)
-                messages = [
-                    {"role": "system", "content": EDGEWATER_NDA_CHECKLIST},
-                    {"role": "user", "content": prompt}
-                ]
-
-                model = os.getenv("GPT_MODEL", "gpt-4")
-
-                response = await self.openai_client.chat.completions.create(
-                    model=model,
+                # Make API call
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o",  # Using GPT-4o as GPT-5 placeholder
                     messages=messages,
                     response_format={
                         "type": "json_schema",
                         "json_schema": NDA_ANALYSIS_SCHEMA
                     },
-                    temperature=0.1,
+                    temperature=0.1,  # Low temperature for consistency
                     max_tokens=4000
                 )
+
+                # Track usage and costs
+                if hasattr(response, 'usage'):
+                    input_tokens = response.usage.prompt_tokens
+                    output_tokens = response.usage.completion_tokens
+                    cost = (input_tokens * self.GPT_INPUT_COST) + (output_tokens * self.GPT_OUTPUT_COST)
+
+                    self.stats['gpt_tokens_input'] += input_tokens
+                    self.stats['gpt_tokens_output'] += output_tokens
+                    self.stats['total_cost_usd'] += cost
+
+                    self.logger.info(
+                        f"GPT-4o call: {input_tokens} input, {output_tokens} output tokens, "
+                        f"${cost:.4f} cost (total: ${self.stats['total_cost_usd']:.2f})"
+                    )
 
                 result = json.loads(response.choices[0].message.content)
                 violations = result.get('violations', [])
 
+                # Add metadata
                 for v in violations:
-                    v['source'] = 'openai'
-                    v['model'] = model
+                    v['source'] = 'gpt5'
+                    v['model'] = 'gpt-4o'
 
                 return violations
 
+            except RateLimitError as e:
+                self.stats['gpt_rate_limits'] += 1
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                    self.logger.warning(f"GPT rate limited, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    self.logger.error(f"GPT rate limit exceeded after {self.max_retries} attempts")
+                    return []
+
+            except APITimeoutError as e:
+                self.stats['gpt_timeouts'] += 1
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)
+                    self.logger.warning(f"GPT timeout, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    self.logger.error(f"GPT timeout after {self.max_retries} attempts")
+                    return []
+
+            except APIConnectionError as e:
+                self.stats['gpt_errors'] += 1
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)
+                    self.logger.warning(f"GPT connection error, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    self.logger.error(f"GPT connection failed after {self.max_retries} attempts")
+                    return []
+
             except Exception as e:
-                logger.error(f"OpenAI analysis error: {e}")
+                self.stats['gpt_errors'] += 1
+                self.logger.error(f"GPT-5 analysis error: {e}", exc_info=True)
                 return []
 
-        async def call_claude():
-            """Async Claude analysis"""
-            if not self.anthropic_client:
-                return []
+        return []
 
-            try:
-                prompt = build_analysis_prompt(working_text, handled_spans)
+    def _validate_with_claude(
+        self,
+        working_text: str,
+        redlines_to_validate: List[Dict],
+        handled_spans: List[tuple]
+    ) -> List[Dict]:
+        """Validate specific redlines with Claude with retry logic and cost tracking"""
+        self.stats['claude_calls'] += 1
+        self.stats['validations'] += len(redlines_to_validate)
 
-                response = await self.anthropic_client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=4000,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-
-                # Parse Claude's response (may need JSON extraction)
-                response_text = response.content[0].text
-                violations = self._parse_claude_analysis(response_text)
-
-                for v in violations:
-                    v['source'] = 'anthropic'
-                    v['model'] = 'claude-3-5-sonnet'
-
-                return violations
-
-            except Exception as e:
-                logger.error(f"Claude analysis error: {e}")
-                return []
-
-        # PARALLEL EXECUTION - Key optimization!
-        # Both LLMs run simultaneously, time = max(openai_time, claude_time)
-        # Instead of sequential time = openai_time + claude_time
-        openai_results, claude_results = await asyncio.gather(
-            call_openai(),
-            call_claude()
+        # Build validation prompt
+        validation_prompt = self._build_validation_prompt(
+            working_text,
+            redlines_to_validate,
+            handled_spans
         )
 
-        # Merge and deduplicate results
-        all_results = openai_results + claude_results
-        return self._deduplicate_redlines(all_results)
+        # Use prompt caching with Claude
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": EDGEWATER_NDA_CHECKLIST,
+                        "cache_control": {"type": "ephemeral"} if self.use_prompt_caching else None
+                    },
+                    {
+                        "type": "text",
+                        "text": validation_prompt
+                    }
+                ]
+            }
+        ]
 
-    def _deduplicate_redlines(self, redlines: List[Dict]) -> List[Dict]:
-        """Remove duplicate redlines from multiple sources"""
-        seen = set()
-        unique = []
+        # Remove None cache_control if not using caching
+        if not self.use_prompt_caching:
+            messages[0]["content"][0].pop("cache_control", None)
 
-        for redline in redlines:
-            key = (redline['start'], redline['end'], redline.get('revised_text', ''))
-            if key not in seen:
-                seen.add(key)
-                unique.append(redline)
+        # Retry logic with exponential backoff
+        for attempt in range(self.max_retries):
+            try:
+                response = self.anthropic_client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=4000,
+                    temperature=0,
+                    messages=messages
+                )
 
-        return unique
+                # Track usage and costs
+                if hasattr(response, 'usage'):
+                    input_tokens = response.usage.input_tokens
+                    output_tokens = response.usage.output_tokens
+                    cost = (input_tokens * self.CLAUDE_INPUT_COST) + (output_tokens * self.CLAUDE_OUTPUT_COST)
 
-    def _parse_claude_analysis(self, response_text: str) -> List[Dict]:
-        """Parse Claude's analysis response"""
-        try:
-            # Try to extract JSON if present
-            if '```json' in response_text:
-                json_start = response_text.find('```json') + 7
-                json_end = response_text.find('```', json_start)
-                json_text = response_text[json_start:json_end].strip()
-            elif '{' in response_text:
-                json_start = response_text.find('{')
-                json_end = response_text.rfind('}') + 1
-                json_text = response_text[json_start:json_end]
-            else:
+                    self.stats['claude_tokens_input'] += input_tokens
+                    self.stats['claude_tokens_output'] += output_tokens
+                    self.stats['total_cost_usd'] += cost
+
+                    self.logger.info(
+                        f"Claude call: {input_tokens} input, {output_tokens} output tokens, "
+                        f"${cost:.4f} cost (total: ${self.stats['total_cost_usd']:.2f})"
+                    )
+
+                # Parse response
+                response_text = response.content[0].text
+
+                # Extract JSON from response
+                validated = self._parse_claude_validation(response_text)
+
+                return validated
+
+            except APIStatusError as e:
+                # Check if it's a rate limit error
+                if hasattr(e, 'status_code') and e.status_code == 429:
+                    self.stats['claude_rate_limits'] += 1
+                    if attempt < self.max_retries - 1:
+                        wait_time = self.retry_delay * (2 ** attempt)
+                        self.logger.warning(f"Claude rate limited, retrying in {wait_time}s: {e}")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        self.logger.error(f"Claude rate limit exceeded after {self.max_retries} attempts")
+                else:
+                    self.stats['claude_errors'] += 1
+                    self.logger.error(f"Claude API error: {e}")
                 return []
 
-            parsed = json.loads(json_text)
-
-            if 'violations' in parsed:
-                return parsed['violations']
-            elif isinstance(parsed, list):
-                return parsed
-            else:
+            except AnthropicConnectionError as e:
+                self.stats['claude_errors'] += 1
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)
+                    self.logger.warning(f"Claude connection error, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    self.logger.error(f"Claude connection failed after {self.max_retries} attempts")
                 return []
 
-        except Exception as e:
-            logger.error(f"Error parsing Claude analysis: {e}")
-            return []
+            except Exception as e:
+                self.stats['claude_errors'] += 1
+                self.logger.error(f"Claude validation error: {e}", exc_info=True)
+                return []
 
-    # Keep all the existing helper methods unchanged
+        return []
+
     def _select_for_validation(self, redlines: List[Dict]) -> List[Dict]:
         """Select which redlines need Claude validation"""
         needs_validation = []
@@ -632,73 +491,102 @@ Format: {{"validated_redlines": [...]}}
         return prompt
 
     def _parse_claude_validation(self, response_text: str) -> List[Dict]:
-        """Parse Claude's validation response"""
-        try:
-            # Try to extract JSON
-            if '```json' in response_text:
-                json_start = response_text.find('```json') + 7
-                json_end = response_text.find('```', json_start)
-                json_text = response_text[json_start:json_end].strip()
-            elif '{' in response_text:
-                json_start = response_text.find('{')
-                json_end = response_text.rfind('}') + 1
-                json_text = response_text[json_start:json_end]
-            else:
-                return []
+        """Parse Claude's validation response with improved error handling"""
+        if not response_text:
+            self.logger.warning("Empty response from Claude validation")
+            return []
 
+        try:
+            # Method 1: Look for JSON code blocks
+            json_blocks = re.findall(r'```json\s*\n(.*?)\n```', response_text, re.DOTALL)
+            if json_blocks:
+                json_text = json_blocks[0].strip()
+            else:
+                # Method 2: Look for JSON-like structure
+                # Find the outermost JSON object or array
+                json_match = re.search(r'(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}|\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\])', response_text, re.DOTALL)
+                if json_match:
+                    json_text = json_match.group(1)
+                else:
+                    # Method 3: Try to find any JSON starting with { or [
+                    if '{' in response_text:
+                        json_start = response_text.find('{')
+                        json_end = response_text.rfind('}') + 1
+                        json_text = response_text[json_start:json_end]
+                    elif '[' in response_text:
+                        json_start = response_text.find('[')
+                        json_end = response_text.rfind(']') + 1
+                        json_text = response_text[json_start:json_end]
+                    else:
+                        self.logger.warning("No JSON structure found in Claude response")
+                        self.logger.debug(f"Response text: {response_text[:500]}")
+                        return []
+
+            # Parse the JSON
             parsed = json.loads(json_text)
 
-            if 'validated_redlines' in parsed:
-                return parsed['validated_redlines']
+            # Validate structure and extract redlines
+            if isinstance(parsed, dict):
+                if 'validated_redlines' in parsed:
+                    redlines = parsed['validated_redlines']
+                elif 'redlines' in parsed:
+                    redlines = parsed['redlines']
+                else:
+                    # If dict but no expected keys, might be a single redline
+                    if all(k in parsed for k in ['start', 'end', 'original_text']):
+                        redlines = [parsed]
+                    else:
+                        self.logger.warning(f"Unexpected JSON structure from Claude: {list(parsed.keys())}")
+                        return []
             elif isinstance(parsed, list):
-                return parsed
+                redlines = parsed
             else:
+                self.logger.warning(f"Unexpected JSON type from Claude: {type(parsed)}")
                 return []
 
+            # Validate each redline has required fields
+            validated_redlines = []
+            required_fields = {'start', 'end', 'original_text'}
+
+            for i, redline in enumerate(redlines):
+                if not isinstance(redline, dict):
+                    self.logger.warning(f"Redline {i} is not a dict: {type(redline)}")
+                    continue
+
+                missing_fields = required_fields - set(redline.keys())
+                if missing_fields:
+                    self.logger.warning(f"Redline {i} missing fields: {missing_fields}")
+                    continue
+
+                # Validate field types
+                try:
+                    redline['start'] = int(redline['start'])
+                    redline['end'] = int(redline['end'])
+                    redline['original_text'] = str(redline['original_text'])
+
+                    # Ensure start < end
+                    if redline['start'] >= redline['end']:
+                        self.logger.warning(f"Invalid redline positions: start={redline['start']}, end={redline['end']}")
+                        continue
+
+                    validated_redlines.append(redline)
+
+                except (ValueError, TypeError) as e:
+                    self.logger.warning(f"Invalid field types in redline {i}: {e}")
+                    continue
+
+            self.logger.info(f"Successfully parsed {len(validated_redlines)} validated redlines from Claude")
+            return validated_redlines
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse Claude validation JSON: {e}")
+            self.logger.debug(f"JSON text attempted: {json_text[:500] if 'json_text' in locals() else 'N/A'}")
+            return []
+
         except Exception as e:
-            logger.error(f"Error parsing Claude validation: {e}")
+            self.logger.error(f"Unexpected error parsing Claude validation: {e}", exc_info=True)
             return []
 
     def get_stats(self) -> Dict:
         """Get orchestration statistics"""
         return self.stats.copy()
-
-    def _extract_clauses(self, text: str) -> List[Dict]:
-        """
-        Extract individual clauses from document for granular caching.
-        """
-        clauses = []
-
-        # Split by common clause delimiters
-        paragraphs = text.split('\n\n')
-        current_position = 0
-
-        for para in paragraphs:
-            if len(para.strip()) < 50:  # Skip very short paragraphs
-                current_position += len(para) + 2
-                continue
-
-            # Look for numbered sections or bullet points
-            sections = []
-            if any(para.startswith(f"{i}.") for i in range(1, 20)):
-                # Split numbered sections
-                import re
-                pattern = r'(?=\d+\.)'
-                sections = re.split(pattern, para)
-                sections = [s for s in sections if s.strip()]
-            else:
-                sections = [para]
-
-            for section in sections:
-                if len(section.strip()) >= 50:  # Minimum clause length
-                    clause_start = text.find(section, current_position)
-                    if clause_start != -1:
-                        clauses.append({
-                            'text': section.strip(),
-                            'start': clause_start,
-                            'end': clause_start + len(section)
-                        })
-
-            current_position += len(para) + 2
-
-        return clauses

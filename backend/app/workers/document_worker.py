@@ -1,18 +1,17 @@
 """
 Document processing worker
-Handles async NDA processing pipeline with Redis queue support
+Handles async NDA processing pipeline
 """
-import os
 import asyncio
 import json
 import uuid
-import gc  # Added for garbage collection
-import aiofiles  # Added for async file operations
-from concurrent.futures import ThreadPoolExecutor  # Added for CPU-bound operations
+import os
+import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from docx import Document
+import logging
 
 from ..core.text_indexer import WorkingTextIndexer
 from ..core.rule_engine import RuleEngine
@@ -20,10 +19,6 @@ from ..core.llm_orchestrator import LLMOrchestrator
 from ..core.docx_engine import TrackChangesEngine, RedlineValidator
 from ..models.schemas import JobStatus, RedlineModel, RedlineSeverity, RedlineSource
 from ..models.checklist_rules import get_rule_explanation
-from .redis_job_queue import RedisJobQueue, JobPriority, JobStatus as RedisJobStatus
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -39,8 +34,6 @@ class DocumentProcessor:
         self.storage_path = Path(storage_path)
         self.rule_engine = RuleEngine()
         self.llm_orchestrator = LLMOrchestrator()
-        # Thread pool for CPU-bound operations
-        self.executor = ThreadPoolExecutor(max_workers=4)
 
     async def process_document(
         self,
@@ -63,28 +56,17 @@ class DocumentProcessor:
             # Update status: parsing
             await self._update_status(status_callback, JobStatus.PARSING, 10)
 
-            # 1. Parse DOCX - OPTIMIZED: Offload CPU-bound parsing to thread pool
-            loop = asyncio.get_running_loop()
+            # 1. Parse DOCX
+            doc = Document(file_path)
+            indexer = WorkingTextIndexer()
+            indexer.build_index(doc)
 
-            # Define CPU-bound operation
-            def parse_document_sync(path):
-                doc = Document(path)
-                indexer = WorkingTextIndexer()
-                indexer.build_index(doc)
-                return doc, indexer, indexer.working_text
+            working_text = indexer.working_text
 
-            # Run in thread pool to avoid blocking event loop
-            doc, indexer, working_text = await loop.run_in_executor(
-                self.executor,
-                parse_document_sync,
-                file_path
-            )
-
-            # Save working text for debugging - OPTIMIZED with async I/O
+            # Save working text for debugging
             working_text_path = self.storage_path / "working" / f"{job_id}.txt"
             working_text_path.parent.mkdir(parents=True, exist_ok=True)
-            async with aiofiles.open(working_text_path, 'w', encoding='utf-8') as f:
-                await f.write(working_text)
+            working_text_path.write_text(working_text, encoding='utf-8')
 
             # Update status: applying rules
             await self._update_status(status_callback, JobStatus.APPLYING_RULES, 30)
@@ -97,8 +79,8 @@ class DocumentProcessor:
             # Update status: analyzing
             await self._update_status(status_callback, JobStatus.ANALYZING, 50)
 
-            # 3. LLM analysis (now async)
-            llm_redlines = await self.llm_orchestrator.analyze(working_text, rule_redlines)
+            # 3. LLM analysis
+            llm_redlines = self.llm_orchestrator.analyze(working_text, rule_redlines)
 
             print(f"Job {job_id}: Found {len(llm_redlines)} LLM redlines")
 
@@ -139,25 +121,9 @@ class DocumentProcessor:
                 'llm_stats': self.llm_orchestrator.get_stats()
             }
 
-            # Save result - OPTIMIZED with async I/O
+            # Save result
             result_path = self.storage_path / "working" / f"{job_id}_result.json"
-            async with aiofiles.open(result_path, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(result, default=str))
-
-            # MEMORY CLEANUP - Free up resources after processing
-            try:
-                # Clean up indexer (clears lxml DOM tree)
-                if hasattr(indexer, 'cleanup'):
-                    indexer.cleanup()
-
-                # Clear document reference
-                del doc
-                del indexer
-
-                # Force garbage collection
-                gc.collect()
-            except Exception as cleanup_error:
-                logger.warning(f"Cleanup error (non-critical): {cleanup_error}")
+            result_path.write_text(json.dumps(result, default=str), encoding='utf-8')
 
             return result
 
@@ -262,14 +228,33 @@ class DocumentProcessor:
 
 
 class JobQueue:
-    """Simple in-memory job queue (replace with Redis for production)"""
+    """Simple in-memory job queue with TTL-based cleanup"""
 
     def __init__(self):
         self.jobs: Dict[str, Dict] = {}
         self.processor = DocumentProcessor()
+        self.retention_days = int(os.getenv("RETENTION_DAYS", 7))
+        self.cleanup_interval_hours = 1  # Run cleanup every hour
+        self.logger = logging.getLogger(__name__)
+
+        # Thread-safe lock for job operations
+        self.jobs_lock = threading.RLock()  # Reentrant lock for thread safety
+
+        # Flag to track if cleanup scheduler has been started
+        self._cleanup_started = False
+
+    async def _ensure_cleanup_started(self):
+        """Ensure cleanup scheduler is running (called on first job submission)"""
+        if not self._cleanup_started:
+            self._cleanup_started = True
+            asyncio.create_task(self._start_cleanup_scheduler())
+            self.logger.info("Started job cleanup scheduler")
 
     async def submit_job(self, job_id: str, file_path: str, filename: str) -> Dict:
-        """Submit a new job to the queue"""
+        """Submit a new job to the queue with thread safety"""
+        # Ensure cleanup scheduler is running
+        await self._ensure_cleanup_started()
+
         job_info = {
             'job_id': job_id,
             'filename': filename,
@@ -281,43 +266,99 @@ class JobQueue:
             'result': None
         }
 
-        self.jobs[job_id] = job_info
+        with self.jobs_lock:
+            self.jobs[job_id] = job_info
 
-        # Process in background
-        asyncio.create_task(self._process_job(job_id, file_path))
+        # Process in background with proper exception handling
+        task = asyncio.create_task(self._process_job(job_id, file_path))
+
+        # Add callback to handle task exceptions
+        def handle_task_exception(task):
+            try:
+                # This will re-raise any exceptions from the task
+                task.result()
+            except asyncio.CancelledError:
+                # Task was cancelled - this is normal during shutdown
+                pass
+            except Exception as e:
+                self.logger.error(f"Background task for job {job_id} failed: {e}")
+
+        task.add_done_callback(handle_task_exception)
 
         return job_info
 
     async def _process_job(self, job_id: str, file_path: str):
-        """Process job and update status"""
-        async def status_callback(update):
-            if job_id in self.jobs:
-                self.jobs[job_id].update(update)
-                self.jobs[job_id]['updated_at'] = datetime.now()
+        """Process job and update status with proper exception handling and thread safety"""
+        try:
+            async def status_callback(update):
+                with self.jobs_lock:
+                    if job_id in self.jobs:
+                        self.jobs[job_id].update(update)
+                        self.jobs[job_id]['updated_at'] = datetime.now()
 
-        result = await self.processor.process_document(
-            job_id,
-            file_path,
-            status_callback
-        )
+            result = await self.processor.process_document(
+                job_id,
+                file_path,
+                status_callback
+            )
 
-        if job_id in self.jobs:
-            self.jobs[job_id]['result'] = result
-            self.jobs[job_id]['status'] = result.get('status', JobStatus.COMPLETE)
+            with self.jobs_lock:
+                if job_id in self.jobs:
+                    self.jobs[job_id]['result'] = result
+                    self.jobs[job_id]['status'] = result.get('status', JobStatus.COMPLETE)
+                    self.jobs[job_id]['updated_at'] = datetime.now()
+
+        except Exception as e:
+            # Ensure job error state is always set with thread safety
+            with self.jobs_lock:
+                if job_id in self.jobs:
+                    self.jobs[job_id]['status'] = JobStatus.ERROR
+                    self.jobs[job_id]['error_message'] = str(e)
+                    self.jobs[job_id]['updated_at'] = datetime.now()
+                    self.jobs[job_id]['result'] = {
+                        'job_id': job_id,
+                        'status': JobStatus.ERROR,
+                        'error': str(e)
+                    }
+            self.logger.error(f"Job {job_id} failed: {e}", exc_info=True)
 
     def get_job_status(self, job_id: str) -> Optional[Dict]:
-        """Get current job status"""
-        return self.jobs.get(job_id)
+        """Get current job status with thread safety"""
+        with self.jobs_lock:
+            # Return a copy to prevent external modifications
+            job = self.jobs.get(job_id)
+            if job:
+                return dict(job)  # Return a shallow copy
+            return None
 
     def update_redline_decision(self, job_id: str, redline_id: str, decision: str):
-        """Update user decision on a redline"""
-        if job_id in self.jobs and self.jobs[job_id]['result']:
-            redlines = self.jobs[job_id]['result'].get('redlines', [])
+        """Update user decision on a redline with thread safety"""
+        with self.jobs_lock:
+            if job_id not in self.jobs:
+                return False
+
+            job = self.jobs[job_id]
+            result = job.get('result')
+
+            if not result:
+                return False
+
+            # Find and update the specific redline
+            redlines = result.get('redlines', [])
+            found = False
+
             for redline in redlines:
                 if redline['id'] == redline_id:
                     redline['user_decision'] = decision
-                    return True
-        return False
+                    found = True
+                    break
+
+            if found:
+                # Update timestamp to reflect modification
+                job['updated_at'] = datetime.now()
+                self.logger.debug(f"Updated redline {redline_id} decision to {decision} for job {job_id}")
+
+            return found
 
     async def export_final_document(self, job_id: str) -> Optional[Path]:
         """Export final document with only accepted changes"""
@@ -358,254 +399,90 @@ class JobQueue:
 
         return output_path
 
+    async def _start_cleanup_scheduler(self):
+        """Start periodic cleanup of old jobs"""
+        while True:
+            try:
+                await asyncio.sleep(self.cleanup_interval_hours * 3600)  # Sleep for interval
+                await self._cleanup_old_jobs()
+            except Exception as e:
+                self.logger.error(f"Error in cleanup scheduler: {e}", exc_info=True)
+                # Continue running even if cleanup fails
+                await asyncio.sleep(60)  # Wait a minute before retrying
 
-class DistributedJobQueue:
-    """
-    Distributed job queue using Redis for horizontal scaling.
-    Provides backward compatibility with existing API while adding new features.
-    """
+    async def _cleanup_old_jobs(self):
+        """Remove jobs older than retention period"""
+        try:
+            cutoff = datetime.now() - timedelta(days=self.retention_days)
+            jobs_to_delete = []
 
-    def __init__(self, use_redis: bool = None):
-        """
-        Initialize job queue (Redis or in-memory based on config).
+            # Identify jobs to delete
+            for job_id, job in self.jobs.items():
+                created_at = job.get('created_at')
+                if created_at and created_at < cutoff:
+                    jobs_to_delete.append(job_id)
 
-        Args:
-            use_redis: Force Redis usage (None = auto-detect from env)
-        """
-        self.processor = DocumentProcessor()
+            # Delete old jobs
+            for job_id in jobs_to_delete:
+                await self._delete_job(job_id)
 
-        # Determine if Redis should be used
-        if use_redis is None:
-            use_redis = os.getenv("USE_REDIS_QUEUE", "false").lower() == "true"
+            if jobs_to_delete:
+                self.logger.info(f"Cleaned up {len(jobs_to_delete)} old jobs (older than {self.retention_days} days)")
 
-        self.use_redis = use_redis and os.getenv("REDIS_URL") is not None
+        except Exception as e:
+            self.logger.error(f"Error cleaning up old jobs: {e}", exc_info=True)
 
-        if self.use_redis:
-            self.redis_queue = RedisJobQueue(redis_url=os.getenv("REDIS_URL"))
-            self.jobs = {}  # Local cache for backward compatibility
-            asyncio.create_task(self._init_redis())
-            asyncio.create_task(self._start_worker())
-        else:
-            # Fallback to in-memory queue
-            self.jobs: Dict[str, Dict] = {}
-            self.redis_queue = None
+    async def _delete_job(self, job_id: str):
+        """Delete a job and its associated files"""
+        try:
+            if job_id not in self.jobs:
+                return
 
-    async def _init_redis(self):
-        """Initialize Redis connection."""
-        await self.redis_queue.connect()
+            job = self.jobs[job_id]
 
-    async def _start_worker(self):
-        """Start Redis job consumer in background."""
-        if self.redis_queue:
-            asyncio.create_task(
-                self.redis_queue.consume_jobs(self._process_redis_job)
-            )
+            # Clean up associated files
+            storage_path = Path("./storage")
 
-    async def _process_redis_job(self, job_id: str, job_data: Dict) -> Dict:
-        """
-        Process job from Redis queue.
+            # Delete working files
+            files_to_delete = [
+                storage_path / "working" / f"{job_id}.txt",
+                storage_path / "working" / f"{job_id}_result.json",
+                storage_path / "exports" / f"{job_id}_redlined.docx",
+                storage_path / "exports" / f"{job_id}_final.docx"
+            ]
 
-        Args:
-            job_id: Job identifier
-            job_data: Job payload
+            # Also delete the original uploaded file if it exists
+            if 'file_path' in job:
+                files_to_delete.append(Path(job['file_path']))
 
-        Returns:
-            Processing result
-        """
-        file_path = job_data['file_path']
+            for file_path in files_to_delete:
+                if file_path.exists():
+                    file_path.unlink()
+                    self.logger.debug(f"Deleted file: {file_path}")
 
-        # Process document
-        result = await self.processor.process_document(
-            job_id,
-            file_path,
-            None  # Status updates handled via Redis
-        )
+            # Remove from memory
+            del self.jobs[job_id]
+            self.logger.debug(f"Deleted job {job_id} from memory")
 
-        return result
+        except Exception as e:
+            self.logger.error(f"Error deleting job {job_id}: {e}", exc_info=True)
 
-    async def submit_job(
-        self,
-        job_id: str,
-        file_path: str,
-        filename: str,
-        priority: str = "standard"
-    ) -> Dict:
-        """
-        Submit a new job to the queue.
+    def get_stats(self) -> Dict:
+        """Get queue statistics"""
+        total_jobs = len(self.jobs)
+        status_counts = {}
 
-        Args:
-            job_id: Unique job identifier
-            file_path: Path to document
-            filename: Original filename
-            priority: Job priority level
+        for job in self.jobs.values():
+            status = job.get('status', 'unknown')
+            status_counts[status] = status_counts.get(status, 0) + 1
 
-        Returns:
-            Job information
-        """
-        job_info = {
-            'job_id': job_id,
-            'filename': filename,
-            'file_path': file_path,
-            'status': JobStatus.QUEUED,
-            'progress': 0,
-            'created_at': datetime.now(),
-            'updated_at': datetime.now(),
-            'result': None
+        return {
+            'total_jobs': total_jobs,
+            'status_breakdown': status_counts,
+            'retention_days': self.retention_days,
+            'oldest_job': min((j.get('created_at') for j in self.jobs.values() if j.get('created_at')), default=None)
         }
 
-        if self.use_redis:
-            # Submit to Redis queue
-            priority_level = {
-                'low': JobPriority.LOW,
-                'standard': JobPriority.STANDARD,
-                'expedited': JobPriority.EXPEDITED,
-                'critical': JobPriority.CRITICAL
-            }.get(priority.lower(), JobPriority.STANDARD)
 
-            await self.redis_queue.submit_job(
-                {
-                    'file_path': file_path,
-                    'filename': filename
-                },
-                priority=priority_level,
-                job_id=job_id
-            )
-
-            # Cache locally for backward compatibility
-            self.jobs[job_id] = job_info
-
-        else:
-            # Use in-memory queue
-            self.jobs[job_id] = job_info
-
-            # Process in background
-            asyncio.create_task(self._process_job(job_id, file_path))
-
-        return job_info
-
-    async def _process_job(self, job_id: str, file_path: str):
-        """Process job in-memory (fallback mode)."""
-        async def status_callback(update):
-            if job_id in self.jobs:
-                self.jobs[job_id].update(update)
-                self.jobs[job_id]['updated_at'] = datetime.now()
-
-        result = await self.processor.process_document(
-            job_id,
-            file_path,
-            status_callback
-        )
-
-        if job_id in self.jobs:
-            self.jobs[job_id]['result'] = result
-            self.jobs[job_id]['status'] = result.get('status', JobStatus.COMPLETE)
-
-    async def get_job_status(self, job_id: str) -> Optional[Dict]:
-        """
-        Get current job status.
-
-        Args:
-            job_id: Job identifier
-
-        Returns:
-            Job status information
-        """
-        if self.use_redis:
-            # Get from Redis
-            redis_status = await self.redis_queue.get_job_status(job_id)
-
-            if redis_status:
-                # Map Redis status to internal format
-                status_map = {
-                    RedisJobStatus.QUEUED.value: JobStatus.QUEUED,
-                    RedisJobStatus.PROCESSING.value: JobStatus.PROCESSING,
-                    RedisJobStatus.COMPLETED.value: JobStatus.COMPLETE,
-                    RedisJobStatus.FAILED.value: JobStatus.ERROR,
-                    RedisJobStatus.RETRYING.value: JobStatus.PROCESSING
-                }
-
-                return {
-                    'job_id': job_id,
-                    'status': status_map.get(redis_status['status'], JobStatus.QUEUED),
-                    'progress': float(redis_status.get('progress', 0)),
-                    'created_at': redis_status.get('created_at'),
-                    'updated_at': redis_status.get('updated_at'),
-                    'result': redis_status.get('result'),
-                    'error': redis_status.get('error')
-                }
-
-            # Check local cache
-            return self.jobs.get(job_id)
-
-        else:
-            # In-memory mode
-            return self.jobs.get(job_id)
-
-    def update_redline_decision(self, job_id: str, redline_id: str, decision: str):
-        """Update user decision on a redline."""
-        if job_id in self.jobs and self.jobs[job_id]['result']:
-            redlines = self.jobs[job_id]['result'].get('redlines', [])
-            for redline in redlines:
-                if redline['id'] == redline_id:
-                    redline['user_decision'] = decision
-                    return True
-        return False
-
-    async def export_final_document(self, job_id: str) -> Optional[Path]:
-        """Export final document with only accepted changes."""
-        # Get job info
-        job_info = await self.get_job_status(job_id)
-
-        if not job_info or not job_info.get('result'):
-            return None
-
-        result = job_info['result']
-
-        # Filter to accepted redlines
-        all_redlines = result.get('redlines', [])
-        accepted = [r for r in all_redlines if r.get('user_decision') == 'accept']
-
-        # Re-generate with only accepted changes
-        file_path = self.jobs[job_id]['file_path'] if job_id in self.jobs else None
-
-        if not file_path:
-            return None
-
-        doc = Document(file_path)
-
-        indexer = WorkingTextIndexer()
-        indexer.build_index(doc)
-
-        # Convert back to dict format
-        accepted_dicts = [{
-            'start': r['start'],
-            'end': r['end'],
-            'original_text': r['original_text'],
-            'revised_text': r['revised_text']
-        } for r in accepted]
-
-        engine = TrackChangesEngine(author="ndaOK")
-        engine.enable_track_changes(doc)
-        engine.apply_all_redlines(doc, indexer, accepted_dicts)
-
-        output_path = Path("./storage/exports") / f"{job_id}_final.docx"
-        doc.save(str(output_path))
-
-        return output_path
-
-    async def get_queue_stats(self) -> Dict:
-        """Get queue statistics."""
-        if self.use_redis:
-            return await self.redis_queue.get_queue_stats()
-        else:
-            return {
-                'total_jobs': len(self.jobs),
-                'queued': sum(1 for j in self.jobs.values() if j['status'] == JobStatus.QUEUED),
-                'processing': sum(1 for j in self.jobs.values() if j['status'] == JobStatus.PROCESSING),
-                'completed': sum(1 for j in self.jobs.values() if j['status'] == JobStatus.COMPLETE),
-                'failed': sum(1 for j in self.jobs.values() if j['status'] == JobStatus.ERROR)
-            }
-
-
-# Global queue instance - automatically uses Redis if configured
-job_queue = DistributedJobQueue()
+# Global queue instance
+job_queue = JobQueue()
