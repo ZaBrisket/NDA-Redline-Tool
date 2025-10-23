@@ -92,11 +92,11 @@ class LLMOrchestrator:
         self.confidence_threshold = float(os.getenv("CONFIDENCE_THRESHOLD", "95"))
         self.use_prompt_caching = os.getenv("USE_PROMPT_CACHING", "true").lower() == "true"
 
-        # Pricing (as of Jan 2025)
-        self.GPT_INPUT_COST = 0.003 / 1000   # $0.003 per 1K input tokens
-        self.GPT_OUTPUT_COST = 0.006 / 1000  # $0.006 per 1K output tokens
-        self.CLAUDE_INPUT_COST = 0.003 / 1000  # $0.003 per 1K input tokens
-        self.CLAUDE_OUTPUT_COST = 0.015 / 1000  # $0.015 per 1K output tokens
+        # Pricing for GPT-5 and Claude Opus 4.1 (as of Jan 2025)
+        self.GPT_INPUT_COST = 0.005 / 1000   # $0.005 per 1K input tokens (GPT-5)
+        self.GPT_OUTPUT_COST = 0.015 / 1000  # $0.015 per 1K output tokens (GPT-5)
+        self.CLAUDE_INPUT_COST = 0.015 / 1000  # $0.015 per 1K input tokens (Opus 4.1)
+        self.CLAUDE_OUTPUT_COST = 0.075 / 1000  # $0.075 per 1K output tokens (Opus 4.1)
 
         # Stats with enhanced tracking
         self.stats = {
@@ -172,7 +172,7 @@ class LLMOrchestrator:
             try:
                 # Make API call
                 response = self.openai_client.chat.completions.create(
-                    model="gpt-4o",  # Using GPT-4o as GPT-5 placeholder
+                    model="gpt-5",  # Using GPT-5 for advanced analysis
                     messages=messages,
                     response_format={
                         "type": "json_schema",
@@ -193,7 +193,7 @@ class LLMOrchestrator:
                     self.stats['total_cost_usd'] += cost
 
                     self.logger.info(
-                        f"GPT-4o call: {input_tokens} input, {output_tokens} output tokens, "
+                        f"GPT-5 call: {input_tokens} input, {output_tokens} output tokens, "
                         f"${cost:.4f} cost (total: ${self.stats['total_cost_usd']:.2f})"
                     )
 
@@ -203,7 +203,7 @@ class LLMOrchestrator:
                 # Add metadata
                 for v in violations:
                     v['source'] = 'gpt5'
-                    v['model'] = 'gpt-4o'
+                    v['model'] = 'gpt-5'
 
                 return violations
 
@@ -290,7 +290,7 @@ class LLMOrchestrator:
         for attempt in range(self.max_retries):
             try:
                 response = self.anthropic_client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model="claude-opus-4-1-20250805",  # Using Opus 4.1 for superior validation
                     max_tokens=4000,
                     temperature=0,
                     messages=messages

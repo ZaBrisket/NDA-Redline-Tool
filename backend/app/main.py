@@ -81,8 +81,8 @@ async def startup_event():
 
     # Validate required environment variables
     required_env_vars = {
-        "OPENAI_API_KEY": "OpenAI API key for GPT-4o analysis",
-        "ANTHROPIC_API_KEY": "Anthropic API key for Claude validation"
+        "OPENAI_API_KEY": "OpenAI API key for GPT-5 analysis",
+        "ANTHROPIC_API_KEY": "Anthropic API key for Claude Opus 4.1 validation"
     }
 
     missing_vars = []
