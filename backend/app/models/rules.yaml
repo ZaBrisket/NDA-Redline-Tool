@@ -23,23 +23,41 @@ rules:
     action: add_after
     explanation: "Add explicit 18-month expiration"
 
-  # NEW CRITICAL PATTERN - Found in 14 training instances
+  # NEW CRITICAL PATTERN - Found in 14 training instances (Made more flexible)
   - id: term_limit_specific_years_to_18mo
     type: confidentiality_term
-    pattern: '\b(?:two\s*\(\s*2\s*\)\s*years?|2\s+years?|three\s*(?:\(\s*3\s*\))?\s*years?|24\s+months?|twenty[- ]four\s+months?)\b'
+    pattern: '(?:two\s*(?:\(\s*2\s*\))?\s*years?|2\s+years?|three\s*(?:\(\s*3\s*\))?\s*years?|24\s+months?|twenty[\s\-]?four\s+months?|period\s+of\s+(?:two|2|three|3)\s+years?)'
     replacement: 'eighteen (18) months'
     severity: critical
     action: replace
     explanation: "Standardize all multi-year terms to eighteen (18) months format"
 
+  # CATCH-ALL for any year duration (fallback pattern)
+  - id: term_limit_any_years_to_18mo
+    type: confidentiality_term
+    pattern: '(?:for\s+a\s+period\s+of|shall\s+(?:survive|remain|continue)\s+for|term\s+of|duration\s+of)\s+(?:one|two|three|four|five|\d+)\s+(?:\(\d+\)\s+)?years?'
+    replacement: 'for a period of eighteen (18) months'
+    severity: critical
+    action: replace
+    explanation: "Standardize any year-based term to 18 months"
+
   # GOVERNING LAW - Critical (Enhanced with full boilerplate from training data)
   - id: governing_law_change_delaware
     type: governing_law
-    pattern: '(?:governed|construed|interpreted)\s+(?:by|in\s+accordance\s+with)\s+(?:the\s+)?laws\s+of\s+(?:the\s+)?(?:State\s+of\s+)?(?!Delaware)([A-Za-z]+(?:\s+[A-Za-z]+)?)'
+    pattern: '(?:governed|construed|interpreted)\s+(?:by|in\s+accordance\s+with)\s+(?:the\s+)?laws?\s+of\s+(?:the\s+)?(?:State\s+of\s+)?(?!Delaware)([A-Za-z]+(?:\s+[A-Za-z]+)?)'
     replacement: 'governed by the internal laws of the State of Delaware, without giving effect to Delaware principles or rules of conflict of laws'
     severity: critical
     action: replace
     explanation: "Change governing law to Delaware with conflict of laws disclaimer"
+
+  # BROADER GOVERNING LAW - Catch more variations
+  - id: governing_law_any_state
+    type: governing_law
+    pattern: '(?:law|laws)\s+of\s+(?:the\s+State\s+of\s+)?(?:Texas|California|New York|Florida|Illinois|Ontario|Canada)'
+    replacement: 'laws of the State of Delaware'
+    severity: critical
+    action: replace
+    explanation: "Change any state law reference to Delaware"
 
   # ENTITY NAME STANDARDIZATION - Critical (NEW - Found throughout training data)
   - id: entity_name_generic_to_edgewater

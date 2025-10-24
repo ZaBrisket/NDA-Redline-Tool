@@ -487,6 +487,49 @@ async def get_stats():
     }
 
 
+@app.post("/api/test/patterns")
+async def test_patterns(sample_text: str):
+    """
+    Test pattern matching on sample text for debugging.
+
+    This endpoint helps diagnose why patterns aren't matching.
+    """
+    from .core.rule_engine import RuleEngine
+
+    # Initialize rule engine
+    rule_engine = RuleEngine()
+
+    # Apply rules to sample text
+    logger.info(f"Testing patterns on text: {sample_text[:100]}...")
+    redlines = rule_engine.apply_rules(sample_text)
+
+    # Get detailed results
+    results = {
+        'input_text': sample_text,
+        'text_length': len(sample_text),
+        'total_rules': len(rule_engine.rules),
+        'redlines_found': len(redlines),
+        'redlines': redlines,
+        'rules_tested': []
+    }
+
+    # Test each rule individually for debugging
+    for rule in rule_engine.rules:
+        if 'compiled_pattern' in rule:
+            pattern = rule['compiled_pattern']
+            matches = list(pattern.finditer(sample_text))
+
+            rule_info = {
+                'rule_id': rule.get('id', 'unknown'),
+                'pattern': rule.get('pattern', ''),
+                'matches_found': len(matches),
+                'match_positions': [(m.start(), m.end(), m.group(0)) for m in matches[:3]]  # First 3 matches
+            }
+            results['rules_tested'].append(rule_info)
+
+    return results
+
+
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
     """Delete a job and its files"""

@@ -4,8 +4,11 @@ First pass before LLM analysis for guaranteed accuracy on known patterns
 """
 import yaml
 import re
+import logging
 from typing import List, Dict, Optional
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class RuleEngine:
@@ -53,20 +56,39 @@ class RuleEngine:
         """
         redlines = []
 
+        # Log text sample for debugging
+        text_sample = working_text[:500] if len(working_text) > 500 else working_text
+        logger.info(f"RuleEngine: Processing document with {len(working_text)} chars")
+        logger.debug(f"Text sample: {text_sample}")
+
         for rule in self.rules:
             if 'compiled_pattern' not in rule:
+                logger.debug(f"Skipping rule {rule.get('id', 'unknown')} - no compiled pattern")
                 continue
 
             pattern = rule['compiled_pattern']
+            rule_id = rule.get('id', 'unknown')
 
-            for match in pattern.finditer(working_text):
+            matches = list(pattern.finditer(working_text))
+            if matches:
+                logger.info(f"Rule '{rule_id}' found {len(matches)} matches")
+            else:
+                logger.debug(f"Rule '{rule_id}' found no matches (pattern: {rule.get('pattern', 'N/A')[:50]}...)")
+
+            for match in matches:
                 redline = self._create_redline(rule, match, working_text)
                 if redline:
+                    logger.debug(f"Created redline: {rule_id} at {match.start()}-{match.end()}: '{match.group(0)[:50]}...'")
                     redlines.append(redline)
 
         # Remove duplicates and overlaps
+        original_count = len(redlines)
         redlines = self._deduplicate_redlines(redlines)
 
+        if original_count != len(redlines):
+            logger.info(f"Deduplicated {original_count} redlines to {len(redlines)}")
+
+        logger.info(f"RuleEngine: Returning {len(redlines)} redlines total")
         return redlines
 
     def _create_redline(self, rule: Dict, match: re.Match, working_text: str) -> Optional[Dict]:
