@@ -19,6 +19,15 @@ from ..prompts.master_prompt import (
     NDA_ANALYSIS_SCHEMA
 )
 
+from ..config.confidence_thresholds import (
+    calculate_redline_confidence,
+    should_validate_high_confidence,
+    get_confidence_explanation,
+    ConfidenceLevel,
+    ProcessingAction,
+    CONFIDENCE_THRESHOLDS
+)
+
 
 class LLMOrchestrator:
     """
@@ -92,11 +101,11 @@ class LLMOrchestrator:
         self.confidence_threshold = float(os.getenv("CONFIDENCE_THRESHOLD", "95"))
         self.use_prompt_caching = os.getenv("USE_PROMPT_CACHING", "true").lower() == "true"
 
-        # Pricing for GPT-5 and Claude Opus 4.1 (as of Jan 2025)
-        self.GPT_INPUT_COST = 0.005 / 1000   # $0.005 per 1K input tokens (GPT-5)
-        self.GPT_OUTPUT_COST = 0.015 / 1000  # $0.015 per 1K output tokens (GPT-5)
-        self.CLAUDE_INPUT_COST = 0.015 / 1000  # $0.015 per 1K input tokens (Opus 4.1)
-        self.CLAUDE_OUTPUT_COST = 0.075 / 1000  # $0.075 per 1K output tokens (Opus 4.1)
+        # Pricing (as of Jan 2025)
+        self.GPT_INPUT_COST = 0.003 / 1000   # $0.003 per 1K input tokens
+        self.GPT_OUTPUT_COST = 0.006 / 1000  # $0.006 per 1K output tokens
+        self.CLAUDE_INPUT_COST = 0.003 / 1000  # $0.003 per 1K input tokens
+        self.CLAUDE_OUTPUT_COST = 0.015 / 1000  # $0.015 per 1K output tokens
 
         # Stats with enhanced tracking
         self.stats = {
@@ -118,7 +127,7 @@ class LLMOrchestrator:
 
     def analyze(self, working_text: str, rule_redlines: List[Dict]) -> List[Dict]:
         """
-        Analyze document with LLM, skipping already-handled spans.
+        Analyze document with LLM using confidence-based processing.
 
         Args:
             working_text: Normalized document text
@@ -137,8 +146,38 @@ class LLMOrchestrator:
         # Filter out redlines that overlap with rule-based ones
         gpt_redlines = self._filter_overlaps(gpt_redlines, handled_spans)
 
-        # Validation logic
-        needs_validation = self._select_for_validation(gpt_redlines)
+        # Calculate confidence scores for each redline
+        for redline in gpt_redlines:
+            # Extract context for confidence calculation
+            start = max(0, redline['start'] - 100)
+            end = min(len(working_text), redline['end'] + 100)
+            context = working_text[start:end]
+
+            # Calculate confidence based on pattern and context
+            rule_id = redline.get('rule_id', 'default')
+            clause_type = redline.get('clause_type', '')
+            gpt_confidence = redline.get('confidence', 100) / 100.0
+
+            confidence, level, action = calculate_redline_confidence(
+                rule_id=rule_id,
+                clause_type=clause_type,
+                text_context=context,
+                pattern_match_quality=gpt_confidence
+            )
+
+            # Update redline with confidence information
+            redline['confidence_score'] = confidence
+            redline['confidence_level'] = level.value
+            redline['processing_action'] = action.value
+            redline['confidence_explanation'] = get_confidence_explanation(confidence, level)
+
+            self.logger.debug(
+                f"Redline at {redline['start']}-{redline['end']}: "
+                f"{confidence:.1f}% confidence ({level.value}), action: {action.value}"
+            )
+
+        # Validation logic based on confidence scores
+        needs_validation = self._select_for_validation_with_confidence(gpt_redlines)
 
         if needs_validation:
             validated = self._validate_with_claude(
@@ -149,6 +188,15 @@ class LLMOrchestrator:
 
             # Merge validated results
             gpt_redlines = self._merge_validated_results(gpt_redlines, needs_validation, validated)
+
+        # Update stats with confidence metrics
+        high_conf = sum(1 for r in gpt_redlines if r.get('confidence_level') == 'high')
+        med_conf = sum(1 for r in gpt_redlines if r.get('confidence_level') == 'medium')
+        low_conf = sum(1 for r in gpt_redlines if r.get('confidence_level') == 'low')
+
+        self.stats['high_confidence_redlines'] = high_conf
+        self.stats['medium_confidence_redlines'] = med_conf
+        self.stats['low_confidence_redlines'] = low_conf
 
         return gpt_redlines
 
@@ -172,7 +220,7 @@ class LLMOrchestrator:
             try:
                 # Make API call
                 response = self.openai_client.chat.completions.create(
-                    model="gpt-5",  # Using GPT-5 for advanced analysis
+                    model="gpt-4o",  # Using GPT-4o as GPT-5 placeholder
                     messages=messages,
                     response_format={
                         "type": "json_schema",
@@ -193,7 +241,7 @@ class LLMOrchestrator:
                     self.stats['total_cost_usd'] += cost
 
                     self.logger.info(
-                        f"GPT-5 call: {input_tokens} input, {output_tokens} output tokens, "
+                        f"GPT-4o call: {input_tokens} input, {output_tokens} output tokens, "
                         f"${cost:.4f} cost (total: ${self.stats['total_cost_usd']:.2f})"
                     )
 
@@ -203,7 +251,7 @@ class LLMOrchestrator:
                 # Add metadata
                 for v in violations:
                     v['source'] = 'gpt5'
-                    v['model'] = 'gpt-5'
+                    v['model'] = 'gpt-4o'
 
                 return violations
 
@@ -290,7 +338,7 @@ class LLMOrchestrator:
         for attempt in range(self.max_retries):
             try:
                 response = self.anthropic_client.messages.create(
-                    model="claude-opus-4-1-20250805",  # Using Opus 4.1 for superior validation
+                    model="claude-sonnet-4-20250514",
                     max_tokens=4000,
                     temperature=0,
                     messages=messages
@@ -354,19 +402,59 @@ class LLMOrchestrator:
         return []
 
     def _select_for_validation(self, redlines: List[Dict]) -> List[Dict]:
-        """Select which redlines need Claude validation"""
+        """Legacy method - kept for compatibility"""
+        return self._select_for_validation_with_confidence(redlines)
+
+    def _select_for_validation_with_confidence(self, redlines: List[Dict]) -> List[Dict]:
+        """
+        Select which redlines need Claude validation based on confidence scores.
+
+        Uses the confidence-based processing actions:
+        - LOW confidence: Always validate
+        - MEDIUM confidence: Suggest for review (validate)
+        - HIGH confidence: Sample 15% for quality control
+        """
         needs_validation = []
 
         for redline in redlines:
-            confidence = redline.get('confidence', 100)
+            action = redline.get('processing_action', '')
+            confidence_score = redline.get('confidence_score', 100)
+            confidence_level = redline.get('confidence_level', '')
 
-            # Always validate low confidence
-            if confidence < self.confidence_threshold:
+            # Process based on action determined by confidence scoring
+            if action == ProcessingAction.REQUIRE_VALIDATION.value:
+                # Low confidence - always validate
                 needs_validation.append(redline)
+                self.logger.debug(
+                    f"Validating LOW confidence ({confidence_score:.1f}%) redline at "
+                    f"{redline['start']}-{redline['end']}"
+                )
 
-            # Random sampling
-            elif random.random() < self.validation_rate:
+            elif action == ProcessingAction.SUGGEST_REVIEW.value:
+                # Medium confidence - validate for review
                 needs_validation.append(redline)
+                self.logger.debug(
+                    f"Validating MEDIUM confidence ({confidence_score:.1f}%) redline at "
+                    f"{redline['start']}-{redline['end']}"
+                )
+
+            elif action == ProcessingAction.AUTO_APPLY.value:
+                # High confidence - sample for quality control
+                if should_validate_high_confidence(confidence_score):
+                    needs_validation.append(redline)
+                    self.logger.debug(
+                        f"Sampling HIGH confidence ({confidence_score:.1f}%) redline for QC at "
+                        f"{redline['start']}-{redline['end']}"
+                    )
+                else:
+                    self.logger.debug(
+                        f"Auto-applying HIGH confidence ({confidence_score:.1f}%) redline at "
+                        f"{redline['start']}-{redline['end']}"
+                    )
+
+        self.logger.info(
+            f"Selected {len(needs_validation)}/{len(redlines)} redlines for validation"
+        )
 
         return needs_validation
 
@@ -459,16 +547,52 @@ class LLMOrchestrator:
         redlines: List[Dict],
         handled_spans: List[tuple]
     ) -> str:
-        """Build prompt for Claude validation"""
+        """Build prompt for Claude validation with few-shot examples"""
         redlines_text = json.dumps(redlines, indent=2)
 
         prompt = f"""
 Please validate these proposed NDA redlines against the Edgewater checklist.
 
+## FEW-SHOT EXAMPLES FROM TRAINING DATA
+
+### Example 1: Term Limit (CORRECT)
+Original: "This Agreement shall remain in effect for a period of two (2) years"
+Revised: "This Agreement shall remain in effect for a period of eighteen (18) months"
+✓ VALID - Must limit to 18 months, not 24 months
+
+### Example 2: Governing Law (CORRECT)
+Original: "governed by the laws of the State of Texas"
+Revised: "governed by the internal laws of the State of Delaware, without giving effect to Delaware principles or rules of conflict of laws"
+✓ VALID - Must use Delaware law with conflict disclaimer
+
+### Example 3: Representatives (CORRECT)
+Original: "its directors, officers, and employees"
+Revised: "directors, officers, advisors, employees, financing sources, consultants, accountants and attorneys (collectively, 'Representatives')"
+✓ VALID - Must expand to full list with collective term
+
+### Example 4: Non-Solicit (INCORRECT)
+Original: "shall not solicit any employee"
+Proposed: "shall not solicit any person"
+✗ INVALID - Should be "any key executive" not "any person"
+
+### Example 5: Entity Name (CORRECT)
+Original: "The Funds"
+Revised: "Edgewater Services, LLC"
+✓ VALID - Standardize to our entity name
+
+## CRITICAL PATTERNS TO VALIDATE
+1. Term limits MUST be "eighteen (18) months" exactly
+2. Delaware law MUST include conflict of laws disclaimer
+3. Representatives MUST include full expanded list
+4. Non-solicit MUST be limited to "key executives"
+5. Entity names MUST be "Edgewater Services, LLC"
+
+## VALIDATION TASK
+
 For each redline, confirm:
 1. The violation is real and requires fixing
-2. The proposed revision is correct
-3. The severity is appropriate
+2. The proposed revision matches our exact requirements
+3. The severity is appropriate (critical > high > moderate)
 4. The positioning is accurate
 
 DOCUMENT TEXT:
