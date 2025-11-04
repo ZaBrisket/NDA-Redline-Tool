@@ -1,0 +1,11 @@
+#!/bin/bash
+cd /home/user/NDA-Redline-Tool
+
+# Load environment variables
+export OPENAI_API_KEY="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"
+export ANTHROPIC_API_KEY="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"
+export USE_PROMPT_CACHING=true
+export VALIDATION_RATE=0.15
+export CONFIDENCE_THRESHOLD=95
+
+python test_diagnostic.py
