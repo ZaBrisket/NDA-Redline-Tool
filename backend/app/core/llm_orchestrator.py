@@ -136,12 +136,16 @@ class LLMOrchestrator:
         Returns:
             List of additional redlines found by LLM
         """
+        self.logger.info(f"Starting LLM analysis: document length={len(working_text)}, rule_redlines={len(rule_redlines)}")
+
         # Build handled spans list
         handled_spans = [(r['start'], r['end']) for r in rule_redlines]
 
         # Call GPT-5
+        self.logger.info("Calling GPT-4o for initial analysis...")
         gpt_redlines = self._analyze_with_gpt5(working_text, handled_spans)
         self.stats['gpt_calls'] += 1
+        self.logger.info(f"GPT-4o returned {len(gpt_redlines)} potential redlines")
 
         # Filter out redlines that overlap with rule-based ones
         gpt_redlines = self._filter_overlaps(gpt_redlines, handled_spans)
@@ -180,14 +184,25 @@ class LLMOrchestrator:
         needs_validation = self._select_for_validation_with_confidence(gpt_redlines)
 
         if needs_validation:
-            validated = self._validate_with_claude(
-                working_text,
-                needs_validation,
-                handled_spans + [(r['start'], r['end']) for r in gpt_redlines if r not in needs_validation]
-            )
+            self.logger.info(f"Selected {len(needs_validation)} redlines for Claude validation")
+            try:
+                validated = self._validate_with_claude(
+                    working_text,
+                    needs_validation,
+                    handled_spans + [(r['start'], r['end']) for r in gpt_redlines if r not in needs_validation]
+                )
 
-            # Merge validated results
-            gpt_redlines = self._merge_validated_results(gpt_redlines, needs_validation, validated)
+                # Merge validated results
+                gpt_redlines = self._merge_validated_results(gpt_redlines, needs_validation, validated)
+                self.logger.info(f"Claude validation completed successfully, merged results")
+            except Exception as e:
+                # Claude validation is optional - if it fails, continue with GPT results only
+                self.logger.warning(
+                    f"Claude validation failed, continuing with GPT results only: {str(e)}"
+                )
+                self.stats['claude_validation_failures'] = self.stats.get('claude_validation_failures', 0) + 1
+        else:
+            self.logger.info("No redlines require Claude validation (all high confidence)")
 
         # Update stats with confidence metrics
         high_conf = sum(1 for r in gpt_redlines if r.get('confidence_level') == 'high')
@@ -197,6 +212,11 @@ class LLMOrchestrator:
         self.stats['high_confidence_redlines'] = high_conf
         self.stats['medium_confidence_redlines'] = med_conf
         self.stats['low_confidence_redlines'] = low_conf
+
+        self.logger.info(
+            f"LLM analysis complete: {len(gpt_redlines)} redlines "
+            f"(high: {high_conf}, medium: {med_conf}, low: {low_conf})"
+        )
 
         return gpt_redlines
 
@@ -263,8 +283,9 @@ class LLMOrchestrator:
                     time.sleep(wait_time)
                     continue
                 else:
-                    self.logger.error(f"GPT rate limit exceeded after {self.max_retries} attempts")
-                    return []
+                    error_msg = f"GPT rate limit exceeded after {self.max_retries} attempts: {str(e)}"
+                    self.logger.error(error_msg)
+                    raise RuntimeError(error_msg) from e
 
             except APITimeoutError as e:
                 self.stats['gpt_timeouts'] += 1
@@ -274,8 +295,9 @@ class LLMOrchestrator:
                     time.sleep(wait_time)
                     continue
                 else:
-                    self.logger.error(f"GPT timeout after {self.max_retries} attempts")
-                    return []
+                    error_msg = f"GPT timeout after {self.max_retries} attempts: {str(e)}"
+                    self.logger.error(error_msg)
+                    raise RuntimeError(error_msg) from e
 
             except APIConnectionError as e:
                 self.stats['gpt_errors'] += 1
@@ -285,15 +307,33 @@ class LLMOrchestrator:
                     time.sleep(wait_time)
                     continue
                 else:
-                    self.logger.error(f"GPT connection failed after {self.max_retries} attempts")
-                    return []
+                    error_msg = f"GPT connection failed after {self.max_retries} attempts: {str(e)}"
+                    self.logger.error(error_msg)
+                    raise RuntimeError(error_msg) from e
+
+            except json.JSONDecodeError as e:
+                self.stats['gpt_errors'] += 1
+                error_msg = f"GPT-5 returned invalid JSON: {str(e)}"
+                self.logger.error(error_msg, exc_info=True)
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)
+                    self.logger.warning(f"Retrying GPT call after JSON error in {wait_time}s")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise RuntimeError(error_msg) from e
 
             except Exception as e:
                 self.stats['gpt_errors'] += 1
-                self.logger.error(f"GPT-5 analysis error: {e}", exc_info=True)
-                return []
+                error_msg = f"GPT-5 analysis unexpected error: {type(e).__name__}: {str(e)}"
+                self.logger.error(error_msg, exc_info=True)
+                # Don't retry on unexpected errors
+                raise RuntimeError(error_msg) from e
 
-        return []
+        # Should never reach here due to raises above, but just in case
+        error_msg = f"GPT-5 analysis failed after {self.max_retries} attempts with no specific error"
+        self.logger.error(error_msg)
+        raise RuntimeError(error_msg)
 
     def _validate_with_claude(
         self,
@@ -377,11 +417,14 @@ class LLMOrchestrator:
                         time.sleep(wait_time)
                         continue
                     else:
-                        self.logger.error(f"Claude rate limit exceeded after {self.max_retries} attempts")
+                        error_msg = f"Claude rate limit exceeded after {self.max_retries} attempts: {str(e)}"
+                        self.logger.error(error_msg)
+                        raise RuntimeError(error_msg) from e
                 else:
                     self.stats['claude_errors'] += 1
-                    self.logger.error(f"Claude API error: {e}")
-                return []
+                    error_msg = f"Claude API error (status {e.status_code if hasattr(e, 'status_code') else 'unknown'}): {str(e)}"
+                    self.logger.error(error_msg)
+                    raise RuntimeError(error_msg) from e
 
             except AnthropicConnectionError as e:
                 self.stats['claude_errors'] += 1
@@ -391,15 +434,21 @@ class LLMOrchestrator:
                     time.sleep(wait_time)
                     continue
                 else:
-                    self.logger.error(f"Claude connection failed after {self.max_retries} attempts")
-                return []
+                    error_msg = f"Claude connection failed after {self.max_retries} attempts: {str(e)}"
+                    self.logger.error(error_msg)
+                    raise RuntimeError(error_msg) from e
 
             except Exception as e:
                 self.stats['claude_errors'] += 1
-                self.logger.error(f"Claude validation error: {e}", exc_info=True)
-                return []
+                error_msg = f"Claude validation unexpected error: {type(e).__name__}: {str(e)}"
+                self.logger.error(error_msg, exc_info=True)
+                # Don't retry on unexpected errors
+                raise RuntimeError(error_msg) from e
 
-        return []
+        # Should never reach here due to raises above, but just in case
+        error_msg = f"Claude validation failed after {self.max_retries} attempts with no specific error"
+        self.logger.error(error_msg)
+        raise RuntimeError(error_msg)
 
     def _select_for_validation(self, redlines: List[Dict]) -> List[Dict]:
         """Legacy method - kept for compatibility"""
