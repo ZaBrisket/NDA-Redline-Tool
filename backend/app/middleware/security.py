@@ -14,6 +14,7 @@ try:
     HAS_MAGIC = True
 except ImportError:
     HAS_MAGIC = False
+    # Log warning about missing python-magic (will log after logger is initialized)
 import uuid
 import inspect
 from typing import Dict, Optional, List, Any, Set, Tuple
@@ -97,6 +98,11 @@ class FileValidator:
 
     def __init__(self):
         self.magic = magic.Magic(mime=True) if HAS_MAGIC else None
+        if not HAS_MAGIC:
+            logger.warning(
+                "python-magic library not installed - MIME type validation is disabled. "
+                "This is a security risk. Install with: pip install python-magic"
+            )
 
     def validate_file(self, file_content: bytes, filename: str) -> Tuple[bool, str]:
         """

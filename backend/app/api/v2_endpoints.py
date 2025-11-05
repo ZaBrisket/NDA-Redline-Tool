@@ -93,7 +93,8 @@ async def analyze_document(
         if enforcement_level:
             try:
                 level = EnforcementLevel.from_string(enforcement_level)
-            except:
+            except (ValueError, KeyError, AttributeError) as e:
+                logger.warning(f"Invalid enforcement level '{enforcement_level}': {e}. Using default.")
                 level = EnforcementLevel.from_string(
                     os.getenv("ENFORCEMENT_LEVEL", "Balanced")
                 )

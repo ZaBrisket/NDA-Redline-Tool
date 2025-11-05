@@ -470,7 +470,8 @@ class RedisJobQueue:
             if key_str in ["data", "result"] and value_str:
                 try:
                     result[key_str] = json.loads(value_str)
-                except:
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    logger.debug(f"Could not parse JSON for key '{key_str}': {e}. Using raw value.")
                     result[key_str] = value_str
             else:
                 result[key_str] = value_str
@@ -562,7 +563,8 @@ class RedisJobQueue:
                             if job_date < cutoff:
                                 await self.redis_client.delete(key)
                                 cleaned += 1
-                        except:
+                        except (ValueError, Exception) as e:
+                            logger.warning(f"Failed to clean up job '{key}': {e}")
                             pass
 
         logger.info(f"Cleaned up {cleaned} old jobs")

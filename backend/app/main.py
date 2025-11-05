@@ -22,6 +22,17 @@ from .models.schemas import (
 from .workers.document_worker import job_queue
 
 
+# Configure logging
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+
 # Create FastAPI app
 app = FastAPI(
     title="NDA Automated Redlining API",
@@ -69,9 +80,6 @@ EXPORT_PATH.mkdir(parents=True, exist_ok=True)
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", 50))  # 50MB default
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024  # 1MB chunks for streaming
-
-# Logging
-logger = logging.getLogger(__name__)
 
 
 @app.on_event("startup")
