@@ -111,7 +111,8 @@ class RuleEngine:
             if revised_text and match.groups():
                 try:
                     revised_text = match.expand(revised_text)
-                except:
+                except (re.error, IndexError) as e:
+                    logger.debug(f"Regex expansion failed: {e}. Using literal replacement.")
                     pass
 
         elif action == 'add_after':

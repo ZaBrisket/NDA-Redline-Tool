@@ -13,3 +13,9 @@ pyyaml==6.0.2
 # LLM APIs
 openai==1.59.7
 anthropic==0.45.1
+
+# Testing framework
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.2  # For FastAPI testing

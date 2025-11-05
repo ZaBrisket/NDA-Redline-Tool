@@ -461,7 +461,8 @@ class SemanticCache:
             avg_entry_size = 2048  # Approximate bytes per entry
             total_bytes = len(self.cache_data) * avg_entry_size
             return total_bytes / (1024 * 1024)
-        except:
+        except (ZeroDivisionError, Exception) as e:
+            logger.debug(f"Failed to estimate cache size: {e}")
             return 0.0
 
     async def batch_search(

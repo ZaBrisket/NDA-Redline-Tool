@@ -215,7 +215,8 @@ class RuleEngineV2:
             if replacement and match.groups():
                 try:
                     return match.expand(replacement)
-                except:
+                except (re.error, IndexError) as e:
+                    logger.debug(f"Regex expansion failed for '{replacement}': {e}. Using literal replacement.")
                     return replacement
             return replacement
 
