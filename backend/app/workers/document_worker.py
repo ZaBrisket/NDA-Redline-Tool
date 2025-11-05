@@ -68,24 +68,35 @@ class DocumentProcessor:
             working_text_path.parent.mkdir(parents=True, exist_ok=True)
             working_text_path.write_text(working_text, encoding='utf-8')
 
-            # Update status: applying rules
-            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 30)
+            # Update status: analyzing with LLM (NEW ORDER: LLM FIRST)
+            await self._update_status(status_callback, JobStatus.ANALYZING, 30)
 
-            # 2. Apply deterministic rules
+            # 2. LLM analysis FIRST (REVERSED ORDER)
+            # LLM analyzes document without any pre-applied rules
+            llm_redlines = self.llm_orchestrator.analyze(working_text, [])
+
+            print(f"Job {job_id}: Found {len(llm_redlines)} LLM redlines (analyzed first)")
+
+            # Update status: applying deterministic rules
+            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 50)
+
+            # 3. Apply deterministic rules SECOND (REVERSED ORDER)
             rule_redlines = self.rule_engine.apply_rules(working_text)
 
-            print(f"Job {job_id}: Found {len(rule_redlines)} rule-based redlines")
+            print(f"Job {job_id}: Found {len(rule_redlines)} rule-based redlines (applied second)")
 
-            # Update status: analyzing
-            await self._update_status(status_callback, JobStatus.ANALYZING, 50)
+            # 4. Compare and combine redlines from both approaches
+            # This allows us to see how LLM analysis compares to deterministic rules
+            all_redlines, comparison_stats = self._compare_and_combine_redlines(
+                llm_redlines,
+                rule_redlines,
+                working_text
+            )
 
-            # 3. LLM analysis
-            llm_redlines = self.llm_orchestrator.analyze(working_text, rule_redlines)
-
-            print(f"Job {job_id}: Found {len(llm_redlines)} LLM redlines")
-
-            # Combine all redlines
-            all_redlines = rule_redlines + llm_redlines
+            print(f"Job {job_id}: Combined into {len(all_redlines)} total redlines")
+            print(f"Job {job_id}: Comparison - LLM-only: {comparison_stats['llm_only']}, "
+                  f"Rule-only: {comparison_stats['rule_only']}, "
+                  f"Both found: {comparison_stats['both_found']}")
 
             # Validate all redlines
             valid_redlines = RedlineValidator.validate_all(all_redlines, working_text)
@@ -109,7 +120,7 @@ class DocumentProcessor:
             # Update status: complete
             await self._update_status(status_callback, JobStatus.COMPLETE, 100)
 
-            # Return results
+            # Return results with comparison statistics
             result = {
                 'job_id': job_id,
                 'status': JobStatus.COMPLETE,
@@ -118,7 +129,18 @@ class DocumentProcessor:
                 'llm_redlines': len(llm_redlines),
                 'redlines': redline_models,
                 'output_path': str(output_path),
-                'llm_stats': self.llm_orchestrator.get_stats()
+                'llm_stats': self.llm_orchestrator.get_stats(),
+                # NEW: Comparison statistics showing LLM vs Rules analysis
+                'comparison_stats': {
+                    'llm_only_count': comparison_stats['llm_only'],
+                    'rule_only_count': comparison_stats['rule_only'],
+                    'both_found_count': comparison_stats['both_found'],
+                    'agreement_rate': (
+                        comparison_stats['both_found'] / comparison_stats['total'] * 100
+                        if comparison_stats['total'] > 0 else 0
+                    ),
+                    'processing_order': 'LLM_FIRST_THEN_RULES'  # Document the new order
+                }
             }
 
             # Save result
@@ -171,6 +193,115 @@ class DocumentProcessor:
         doc.save(str(output_path))
 
         return output_path
+
+    def _compare_and_combine_redlines(
+        self,
+        llm_redlines: List[Dict],
+        rule_redlines: List[Dict],
+        working_text: str
+    ) -> tuple[List[Dict], Dict]:
+        """
+        Compare and combine redlines from LLM and rule-based approaches.
+
+        This method:
+        1. Identifies redlines found by both approaches (high confidence)
+        2. Identifies redlines found only by LLM (LLM-specific insights)
+        3. Identifies redlines found only by rules (deterministic catches)
+        4. Merges them intelligently, marking the source and agreement
+
+        Returns:
+            Tuple of (combined_redlines, comparison_stats)
+        """
+        combined = []
+        comparison_stats = {
+            'llm_only': 0,
+            'rule_only': 0,
+            'both_found': 0,
+            'total': 0
+        }
+
+        # Create a map of rule redlines by position for quick lookup
+        rule_map = {}
+        for rule_redline in rule_redlines:
+            key = (rule_redline['start'], rule_redline['end'])
+            rule_map[key] = rule_redline
+
+        # Process LLM redlines first
+        llm_processed = set()
+        for llm_redline in llm_redlines:
+            key = (llm_redline['start'], llm_redline['end'])
+
+            # Check if rule engine found the same position
+            if key in rule_map:
+                # Both found it - merge with highest confidence
+                rule_redline = rule_map[key]
+                merged = self._merge_redlines(llm_redline, rule_redline)
+                merged['source'] = 'both'
+                merged['agreement'] = True
+                merged['llm_version'] = llm_redline.copy()
+                merged['rule_version'] = rule_redline.copy()
+                combined.append(merged)
+                comparison_stats['both_found'] += 1
+                llm_processed.add(key)
+            else:
+                # Only LLM found it
+                llm_redline['source'] = 'llm'
+                llm_redline['agreement'] = False
+                combined.append(llm_redline)
+                comparison_stats['llm_only'] += 1
+                llm_processed.add(key)
+
+        # Add rule redlines that weren't found by LLM
+        for rule_redline in rule_redlines:
+            key = (rule_redline['start'], rule_redline['end'])
+            if key not in llm_processed:
+                # Only rule engine found it
+                rule_redline['source'] = 'rule'
+                rule_redline['agreement'] = False
+                combined.append(rule_redline)
+                comparison_stats['rule_only'] += 1
+
+        comparison_stats['total'] = len(combined)
+
+        # Sort by position
+        combined.sort(key=lambda r: r['start'])
+
+        return combined, comparison_stats
+
+    def _merge_redlines(self, llm_redline: Dict, rule_redline: Dict) -> Dict:
+        """
+        Merge redlines from LLM and rule engine when they overlap.
+
+        Priority:
+        - Use rule engine's revised_text (deterministic is more reliable)
+        - Use rule engine's severity
+        - Keep LLM's explanation but note agreement
+        - Set confidence to 100 (both agreed)
+        """
+        merged = rule_redline.copy()
+
+        # Enhance explanation to note both approaches found it
+        llm_explanation = llm_redline.get('explanation', '')
+        rule_explanation = rule_redline.get('explanation', '')
+
+        if llm_explanation and rule_explanation:
+            merged['explanation'] = (
+                f"[VERIFIED BY BOTH LLM AND RULES] "
+                f"Rule: {rule_explanation} | "
+                f"LLM: {llm_explanation}"
+            )
+        elif rule_explanation:
+            merged['explanation'] = f"[VERIFIED BY BOTH LLM AND RULES] {rule_explanation}"
+        elif llm_explanation:
+            merged['explanation'] = f"[VERIFIED BY BOTH LLM AND RULES] {llm_explanation}"
+
+        # Set confidence to 100 since both approaches agree
+        merged['confidence'] = 100
+
+        # Preserve both versions for analysis
+        merged['sources'] = ['llm', 'rule']
+
+        return merged
 
     async def _update_status(
         self,

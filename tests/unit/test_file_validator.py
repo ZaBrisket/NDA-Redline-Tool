@@ -59,28 +59,26 @@ class TestFileValidator:
         assert invalid_content[:4] != docx_magic
 
     def test_filename_sanitization(self):
-        """Test that filenames are sanitized properly"""
+        """Test that filenames are sanitized properly using the actual sanitize_filename function"""
+        import sys
+        from pathlib import Path
+        # Add backend to path
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
+        from app.main import sanitize_filename
+
         test_cases = [
-            ("../../etc/passwd", False),  # Path traversal
-            ("test.docx", True),  # Normal file
-            ("my document.docx", True),  # Spaces OK
-            ("../../../malicious.docx", False),  # Path traversal
-            ("test\x00.docx", False),  # Null byte
-            ("COM1.docx", False),  # Windows reserved name
+            ("../../etc/passwd", "passwd"),  # Path traversal - only basename kept
+            ("test.docx", "test.docx"),  # Normal file - unchanged
+            ("my document.docx", "my document.docx"),  # Spaces OK
+            ("../../../malicious.docx", "malicious.docx"),  # Path traversal - only basename kept
+            ("test\x00.docx", "test.docx"),  # Null byte removed
+            ("COM1.docx", "safe_COM1.docx"),  # Windows reserved name - prefixed with safe_
+            ("CON.docx", "safe_CON.docx"),  # Windows reserved name - prefixed with safe_
         ]
 
-        def is_safe_filename(filename):
-            """Simple filename safety check"""
-            if '..' in filename:
-                return False
-            if '\x00' in filename:
-                return False
-            if filename.upper() in ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'LPT1']:
-                return False
-            return True
-
-        for filename, should_be_safe in test_cases:
-            assert is_safe_filename(filename) == should_be_safe
+        for input_filename, expected_output in test_cases:
+            result = sanitize_filename(input_filename)
+            assert result == expected_output, f"sanitize_filename('{input_filename}') = '{result}', expected '{expected_output}'"
 
     def test_mime_type_validation(self):
         """Test MIME type checking"""
@@ -101,18 +99,10 @@ class TestFileValidator:
         for mime in invalid_mimes:
             assert mime not in allowed_mime_types
 
-    @patch('backend.app.middleware.security.HAS_MAGIC', False)
+    @pytest.mark.skip(reason="Security middleware module doesn't exist - outdated test")
     def test_missing_python_magic_warning(self, caplog):
         """Test that warning is logged when python-magic is missing"""
-        from backend.app.middleware.security import FileValidator
-
-        validator = FileValidator()
-
-        # Check that validator was created
-        assert validator is not None
-
-        # When HAS_MAGIC is False, warning should be in logs
-        # Note: In actual code, the warning is logged in __init__
+        pass
 
     def test_empty_file_rejection(self):
         """Test that empty files are rejected"""
