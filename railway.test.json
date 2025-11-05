@@ -1,0 +1,24 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "nixpacksConfigPath": "nixpacks.toml"
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "startCommand": "pytest tests/ -v --tb=short",
+    "restartPolicyType": "NEVER",
+    "healthcheckPath": null,
+    "healthcheckTimeout": null
+  },
+  "environments": {
+    "test": {
+      "variables": {
+        "ENVIRONMENT": "test",
+        "LOG_LEVEL": "DEBUG",
+        "OPENAI_API_KEY": "sk-test-fake-key-do-not-use",
+        "ANTHROPIC_API_KEY": "sk-ant-test-fake-key-do-not-use"
+      }
+    }
+  }
+}
