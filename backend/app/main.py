@@ -173,12 +173,37 @@ CHUNK_SIZE = 1024 * 1024  # 1MB chunks for streaming
 
 @app.get("/")
 async def root():
-    """Health check"""
+    """Root endpoint"""
     return {
         "service": "NDA Automated Redlining",
         "version": "1.0.0",
         "status": "operational"
     }
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for monitoring and load balancers.
+
+    Checks:
+    - API keys are configured
+    - Service is running
+    """
+    health_status = {
+        "status": "healthy",
+        "version": "1.0.0",
+        "checks": {
+            "openai_key_configured": bool(os.getenv("OPENAI_API_KEY") and not os.getenv("OPENAI_API_KEY").startswith("sk-test")),
+            "anthropic_key_configured": bool(os.getenv("ANTHROPIC_API_KEY") and not os.getenv("ANTHROPIC_API_KEY").startswith("sk-ant-test")),
+        }
+    }
+
+    # Check if any critical component is unhealthy
+    if not all(health_status["checks"].values()):
+        health_status["status"] = "degraded"
+
+    return health_status
 
 
 def sanitize_filename(filename: str, max_length: int = 255) -> str:
