@@ -32,8 +32,10 @@ except ImportError as e:
 
 
 # Configure logging
+# Normalize LOG_LEVEL to uppercase to handle case-insensitive env vars (e.g., "Info" -> "INFO")
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler()
