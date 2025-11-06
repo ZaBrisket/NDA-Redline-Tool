@@ -10,8 +10,16 @@ export default function UploadPage() {
   const [dragActive, setDragActive] = useState(false);
 
   const handleUpload = async (file: File) => {
+    // Validate file type
     if (!file.name.endsWith('.docx')) {
       alert('Please upload a .docx file');
+      return;
+    }
+
+    // Validate file size (50MB limit to match backend)
+    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB in bytes
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`File too large. Maximum size is 50MB. Your file is ${(file.size / 1024 / 1024).toFixed(1)}MB`);
       return;
     }
 
@@ -22,20 +30,36 @@ export default function UploadPage() {
       formData.append('file', file);
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+      // Add timeout handling (30 seconds)
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+
       const response = await fetch(`${apiUrl}/api/upload`, {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       });
 
+      clearTimeout(timeout);
+
       if (!response.ok) {
-        throw new Error('Upload failed');
+        const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }));
+        throw new Error(errorData.detail || 'Upload failed');
       }
 
       const data = await response.json();
       router.push(`/review/${data.job_id}`);
     } catch (error) {
-      console.error('Upload error:', error);
-      alert('Failed to upload file. Please try again.');
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          alert('Upload timed out. Please check your connection and try again.');
+        } else {
+          alert(`Failed to upload file: ${error.message}`);
+        }
+      } else {
+        alert('Failed to upload file. Please try again.');
+      }
       setUploading(false);
     }
   };

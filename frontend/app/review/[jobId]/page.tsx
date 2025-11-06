@@ -118,7 +118,8 @@ export default function ReviewPage() {
         }),
       });
     } catch (err) {
-      console.error('Failed to save decision:', err);
+      // Silently fail - decision will be retried on next change
+      // In production, consider logging to a monitoring service
     }
   };
 
