@@ -245,10 +245,13 @@ NDA_ANALYSIS_SCHEMA = {
                         "clause_type",
                         "start",
                         "end",
+                        "anchor_before",
+                        "anchor_after",
                         "original_text",
                         "revised_text",
                         "severity",
-                        "confidence"
+                        "confidence",
+                        "reasoning"
                     ],
                     "additionalProperties": False
                 }

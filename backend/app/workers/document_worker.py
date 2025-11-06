@@ -62,6 +62,7 @@ class DocumentProcessor:
             indexer.build_index(doc)
 
             working_text = indexer.working_text
+            logging.getLogger(__name__).info(f"Job {job_id}: Parsed document, extracted {len(working_text)} characters")
 
             # Save working text for debugging
             working_text_path = self.storage_path / "working" / f"{job_id}.txt"
@@ -73,7 +74,9 @@ class DocumentProcessor:
 
             # 2. LLM analysis FIRST (REVERSED ORDER)
             # LLM analyzes document without any pre-applied rules
+            logging.getLogger(__name__).info(f"Job {job_id}: Starting LLM analysis...")
             llm_redlines = self.llm_orchestrator.analyze(working_text, [])
+            logging.getLogger(__name__).info(f"Job {job_id}: LLM analysis complete - found {len(llm_redlines)} redlines")
 
             print(f"Job {job_id}: Found {len(llm_redlines)} LLM redlines (analyzed first)")
 
@@ -81,7 +84,9 @@ class DocumentProcessor:
             await self._update_status(status_callback, JobStatus.APPLYING_RULES, 50)
 
             # 3. Apply deterministic rules SECOND (REVERSED ORDER)
+            logging.getLogger(__name__).info(f"Job {job_id}: Starting rule engine...")
             rule_redlines = self.rule_engine.apply_rules(working_text)
+            logging.getLogger(__name__).info(f"Job {job_id}: Rule engine complete - found {len(rule_redlines)} redlines")
 
             print(f"Job {job_id}: Found {len(rule_redlines)} rule-based redlines (applied second)")
 
@@ -150,6 +155,10 @@ class DocumentProcessor:
             return result
 
         except Exception as e:
+            logging.getLogger(__name__).error(
+                f"Job {job_id}: Processing failed with {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
             print(f"Error processing document {job_id}: {e}")
             import traceback
             traceback.print_exc()
