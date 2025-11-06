@@ -4,6 +4,7 @@ FastAPI backend for NDA automated redlining
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
+from contextlib import asynccontextmanager
 from pathlib import Path
 import uuid
 import asyncio
@@ -21,6 +22,14 @@ from .models.schemas import (
 )
 from .workers.document_worker import job_queue
 
+# Import V2 API router
+try:
+    from .api.v2_endpoints import router as v2_router
+    V2_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"V2 endpoints not available: {e}")
+    V2_AVAILABLE = False
+
 
 # Configure logging
 logging.basicConfig(
@@ -33,64 +42,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Create FastAPI app
-app = FastAPI(
-    title="NDA Automated Redlining API",
-    description="Production-grade NDA review with Word track changes",
-    version="1.0.0"
-)
-
-# CORS configuration
-# Parse allowed origins from environment variable
-ALLOWED_ORIGINS = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:8000"
-).split(",")
-
-# Clean up whitespace from origins
-ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS]
-
-# Validate origins
-for origin in ALLOWED_ORIGINS:
-    if origin == "*":
-        logger.warning("WARNING: Using wildcard (*) for CORS origins with credentials is a security risk!")
-        if os.getenv("ENVIRONMENT") == "production":
-            raise ValueError("CORS wildcard origin not allowed in production with credentials enabled")
-
-# CORS middleware with secure configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,  # Explicit allowed origins only
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],  # Only required methods
-    allow_headers=["Content-Type", "Authorization"],  # Only required headers
-    max_age=3600,  # Cache preflight requests for 1 hour
-)
-
-# Storage paths
-STORAGE_PATH = Path("./storage")
-UPLOAD_PATH = STORAGE_PATH / "uploads"
-EXPORT_PATH = STORAGE_PATH / "exports"
-
-# Ensure directories exist
-UPLOAD_PATH.mkdir(parents=True, exist_ok=True)
-EXPORT_PATH.mkdir(parents=True, exist_ok=True)
-
-# File upload configuration
-MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", 50))  # 50MB default
-MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
-CHUNK_SIZE = 1024 * 1024  # 1MB chunks for streaming
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Validate configuration and API keys at startup"""
+# Modern FastAPI lifespan context manager (replaces deprecated on_event)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events using modern lifespan pattern"""
+    # Startup
     logger.info("Starting NDA Automated Redlining API...")
 
     # Validate required environment variables
     required_env_vars = {
-        "OPENAI_API_KEY": "OpenAI API key for GPT-5 analysis",
-        "ANTHROPIC_API_KEY": "Anthropic API key for Claude Opus 4.1 validation"
+        "OPENAI_API_KEY": "OpenAI API key for GPT-4o analysis",
+        "ANTHROPIC_API_KEY": "Anthropic API key for Claude validation"
     }
 
     missing_vars = []
@@ -124,23 +86,21 @@ async def startup_event():
 
     # Log configuration
     logger.info(f"Configuration:")
-    logger.info(f"  - Max file size: {MAX_FILE_SIZE_MB}MB")
-    logger.info(f"  - CORS origins: {ALLOWED_ORIGINS}")
-    logger.info(f"  - Storage path: {STORAGE_PATH}")
+    logger.info(f"  - Max file size: {int(os.getenv('MAX_FILE_SIZE_MB', 50))}MB")
     logger.info(f"  - Retention days: {os.getenv('RETENTION_DAYS', 7)}")
     logger.info(f"  - Validation rate: {os.getenv('VALIDATION_RATE', '0.15')}")
     logger.info(f"  - Confidence threshold: {os.getenv('CONFIDENCE_THRESHOLD', '95')}")
 
     logger.info("API startup complete ✓")
 
+    yield  # Application runs here
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
+    # Shutdown
     logger.info("Shutting down NDA Automated Redlining API...")
 
     # Cleanup any pending jobs
     try:
+        from .models.schemas import JobStatus
         pending_jobs = [job for job in job_queue.jobs.values() if job.get('status') == JobStatus.QUEUED]
         if pending_jobs:
             logger.warning(f"Cancelling {len(pending_jobs)} pending jobs on shutdown")
@@ -154,6 +114,61 @@ async def shutdown_event():
     logger.info("Shutdown complete")
 
 
+# Create FastAPI app with modern lifespan
+app = FastAPI(
+    title="NDA Automated Redlining API",
+    description="Production-grade NDA review with Word track changes",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS configuration
+# Parse allowed origins from environment variable
+ALLOWED_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:8000"
+).split(",")
+
+# Clean up whitespace from origins
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS]
+
+# Validate origins
+for origin in ALLOWED_ORIGINS:
+    if origin == "*":
+        logger.warning("WARNING: Using wildcard (*) for CORS origins with credentials is a security risk!")
+        if os.getenv("ENVIRONMENT") == "production":
+            raise ValueError("CORS wildcard origin not allowed in production with credentials enabled")
+
+# CORS middleware with secure configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,  # Explicit allowed origins only
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],  # Only required methods
+    allow_headers=["Content-Type", "Authorization"],  # Only required headers
+    max_age=3600,  # Cache preflight requests for 1 hour
+)
+
+# Register V2 API router if available
+if V2_AVAILABLE:
+    app.include_router(v2_router)
+    logger.info("V2 API endpoints registered")
+
+# Storage paths
+STORAGE_PATH = Path("./storage")
+UPLOAD_PATH = STORAGE_PATH / "uploads"
+EXPORT_PATH = STORAGE_PATH / "exports"
+
+# Ensure directories exist
+UPLOAD_PATH.mkdir(parents=True, exist_ok=True)
+EXPORT_PATH.mkdir(parents=True, exist_ok=True)
+
+# File upload configuration
+MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", 50))  # 50MB default
+MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
+CHUNK_SIZE = 1024 * 1024  # 1MB chunks for streaming
+
+
 @app.get("/")
 async def root():
     """Health check"""
@@ -165,7 +180,16 @@ async def root():
 
 
 def sanitize_filename(filename: str, max_length: int = 255) -> str:
-    """Sanitize filename to prevent path traversal attacks"""
+    """
+    Sanitize filename to prevent path traversal attacks and handle reserved names.
+
+    Handles:
+    - Path traversal attempts
+    - Null bytes
+    - Unsafe characters
+    - Windows reserved names (COM1, LPT1, CON, PRN, AUX, NUL, etc.)
+    - Length limits
+    """
     # Remove path components
     filename = os.path.basename(filename)
 
@@ -177,13 +201,27 @@ def sanitize_filename(filename: str, max_length: int = 255) -> str:
     for char in unsafe_chars:
         filename = filename.replace(char, '_')
 
+    # Check for Windows reserved names
+    # Reserved names: CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9
+    # Can appear with or without extension (e.g., "CON" or "CON.txt")
+    windows_reserved = {
+        'CON', 'PRN', 'AUX', 'NUL',
+        'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+        'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+    }
+
+    name_without_ext = os.path.splitext(filename)[0].upper()
+    if name_without_ext in windows_reserved:
+        # Prefix with underscore to make it safe
+        filename = f"safe_{filename}"
+
     # Limit length
     if len(filename) > max_length:
         name, ext = os.path.splitext(filename)
         filename = name[:max_length-len(ext)] + ext
 
     # Prevent empty filenames
-    if not filename:
+    if not filename or filename.strip() == '':
         filename = 'document.docx'
 
     return filename
