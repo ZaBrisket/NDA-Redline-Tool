@@ -22,16 +22,7 @@ from .models.schemas import (
 )
 from .workers.document_worker import job_queue
 
-# Import V2 API router
-try:
-    from .api.v2_endpoints import router as v2_router
-    V2_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"V2 endpoints not available: {e}")
-    V2_AVAILABLE = False
-
-
-# Configure logging
+# Configure logging FIRST before any code that uses logger
 # Normalize LOG_LEVEL to uppercase to handle case-insensitive env vars (e.g., "Info" -> "INFO")
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -42,6 +33,14 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Import V2 API router
+try:
+    from .api.v2_endpoints import router as v2_router
+    V2_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"V2 endpoints not available: {e}")
+    V2_AVAILABLE = False
 
 
 # Modern FastAPI lifespan context manager (replaces deprecated on_event)
