@@ -355,6 +355,156 @@ Return JSON in this format:
         logger.warning("Using fallback text parser for non-JSON response")
         return {"redlines": [], "error": "Response was not structured JSON"}
 
+    def _extract_clauses(self, text: str) -> List[Dict]:
+        """
+        Extract individual clauses from document for batch processing.
+
+        Used by batch API to split documents into manageable chunks.
+        This is a simple text-based extraction - doesn't require LLM.
+
+        Args:
+            text: Full document text
+
+        Returns:
+            List of clause dictionaries with text and positions
+        """
+        clauses = []
+
+        # Split by common clause delimiters
+        paragraphs = text.split('\n\n')
+        current_position = 0
+
+        for para in paragraphs:
+            if len(para.strip()) < 50:  # Skip very short paragraphs
+                current_position += len(para) + 2
+                continue
+
+            # Look for numbered sections or bullet points
+            sections = []
+            if any(para.startswith(f"{i}.") for i in range(1, 20)):
+                # Split numbered sections
+                import re
+                pattern = r'(?=\d+\.)'
+                sections = re.split(pattern, para)
+                sections = [s for s in sections if s.strip()]
+            else:
+                sections = [para]
+
+            for section in sections:
+                if len(section.strip()) >= 50:  # Minimum clause length
+                    clause_start = text.find(section, current_position)
+                    if clause_start != -1:
+                        clauses.append({
+                            'text': section.strip(),
+                            'start': clause_start,
+                            'end': clause_start + len(section)
+                        })
+
+            current_position += len(para) + 2
+
+        return clauses
+
+    async def _analyze_clause_with_gpt5(
+        self,
+        clause_text: str,
+        clause_start: int,
+        full_text: str
+    ) -> List[Dict]:
+        """
+        Analyze a single clause with Claude (legacy method name for compatibility).
+
+        NOTE: Despite the name, this now uses Claude Opus (not GPT-5).
+        The name is kept for backward compatibility with batch API.
+
+        Args:
+            clause_text: The clause to analyze
+            clause_start: Starting position in document
+            full_text: Full document for context
+
+        Returns:
+            List of redlines for this clause
+        """
+        logger.debug(f"Analyzing clause at position {clause_start} with Claude Opus")
+
+        try:
+            # Build focused prompt for clause
+            system_prompt = """You are a legal expert reviewing NDA clauses for Edgewater Services, LLC.
+
+Identify violations in this specific clause and provide redlines.
+Focus on:
+- Term limits (18 months maximum)
+- Governing law (Delaware with conflict disclaimer)
+- Representatives definition (full expanded list)
+- Non-solicitation (limited to key executives)
+- Confidentiality scope
+- IP rights"""
+
+            clause_prompt = f"""Analyze this specific clause from an NDA:
+
+CLAUSE:
+{clause_text}
+
+CONTEXT: This is part of a larger NDA. Focus only on issues within this clause.
+
+Return JSON:
+{{
+    "redlines": [
+        {{
+            "start": relative_position_in_clause,
+            "end": relative_position_in_clause,
+            "original_text": "text to change",
+            "revised_text": "suggested change",
+            "clause_type": "category",
+            "severity": "critical/high/moderate",
+            "confidence": 0-100,
+            "explanation": "why this needs changing"
+        }}
+    ]
+}}"""
+
+            response = await self.client.messages.create(
+                model=self.opus_model,
+                max_tokens=2000,
+                temperature=0.3,
+                system=system_prompt,
+                messages=[{"role": "user", "content": clause_prompt}]
+            )
+
+            # Track usage
+            if hasattr(response, 'usage'):
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                cost = (input_tokens * self.OPUS_INPUT_COST) + (output_tokens * self.OPUS_OUTPUT_COST)
+
+                self.stats['opus_tokens_input'] += input_tokens
+                self.stats['opus_tokens_output'] += output_tokens
+                self.stats['total_cost_usd'] += cost
+
+            # Parse response
+            content = response.content[0].text
+
+            try:
+                result = json.loads(content)
+                redlines = result.get('redlines', [])
+
+                # Adjust positions to be relative to full document
+                for redline in redlines:
+                    redline['start'] += clause_start
+                    redline['end'] += clause_start
+                    redline['source'] = 'llm'
+                    redline['model'] = 'claude-opus'
+
+                logger.debug(f"Claude Opus found {len(redlines)} redlines in clause")
+                return redlines
+
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse Claude response as JSON: {content[:200]}")
+                return []
+
+        except Exception as e:
+            logger.error(f"Clause analysis with Claude failed: {e}")
+            return []
+
     def get_stats(self) -> Dict:
         """Get processing statistics"""
         stats = self.stats.copy()
