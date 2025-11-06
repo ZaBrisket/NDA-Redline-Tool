@@ -69,39 +69,45 @@ class DocumentProcessor:
             working_text_path.parent.mkdir(parents=True, exist_ok=True)
             working_text_path.write_text(working_text, encoding='utf-8')
 
-            # Update status: analyzing with LLM (NEW ORDER: LLM FIRST)
+            # Update status: analyzing with ALL-CLAUDE orchestrator
             await self._update_status(status_callback, JobStatus.ANALYZING, 30)
 
-            # 2. LLM analysis FIRST (REVERSED ORDER)
-            # LLM analyzes document without any pre-applied rules
-            logging.getLogger(__name__).info(f"Job {job_id}: Starting LLM analysis...")
-            llm_redlines = self.llm_orchestrator.analyze(working_text, [])
-            logging.getLogger(__name__).info(f"Job {job_id}: LLM analysis complete - found {len(llm_redlines)} redlines")
-
-            print(f"Job {job_id}: Found {len(llm_redlines)} LLM redlines (analyzed first)")
-
-            # Update status: applying deterministic rules
-            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 50)
-
-            # 3. Apply deterministic rules SECOND (REVERSED ORDER)
+            # 2. ALL-CLAUDE ANALYSIS
+            # Step 1: Apply deterministic rules FIRST
             logging.getLogger(__name__).info(f"Job {job_id}: Starting rule engine...")
             rule_redlines = self.rule_engine.apply_rules(working_text)
             logging.getLogger(__name__).info(f"Job {job_id}: Rule engine complete - found {len(rule_redlines)} redlines")
+            print(f"Job {job_id}: Found {len(rule_redlines)} rule-based redlines")
 
-            print(f"Job {job_id}: Found {len(rule_redlines)} rule-based redlines (applied second)")
+            # Update status: analyzing with Claude
+            await self._update_status(status_callback, JobStatus.APPLYING_RULES, 50)
 
-            # 4. Compare and combine redlines from both approaches
-            # This allows us to see how LLM analysis compares to deterministic rules
-            all_redlines, comparison_stats = self._compare_and_combine_redlines(
-                llm_redlines,
-                rule_redlines,
-                working_text
-            )
+            # Step 2: LLM analysis with Claude Opus + 100% Sonnet validation
+            # The orchestrator will:
+            #   - Use Claude Opus for comprehensive recall
+            #   - Validate ALL suggestions with Claude Sonnet (100%)
+            #   - Merge with rule_redlines automatically
+            logging.getLogger(__name__).info(f"Job {job_id}: Starting All-Claude analysis (Opus + Sonnet 100% validation)...")
+            all_redlines = await self.llm_orchestrator.analyze(working_text, rule_redlines)
+            logging.getLogger(__name__).info(f"Job {job_id}: All-Claude analysis complete - {len(all_redlines)} total redlines")
 
-            print(f"Job {job_id}: Combined into {len(all_redlines)} total redlines")
-            print(f"Job {job_id}: Comparison - LLM-only: {comparison_stats['llm_only']}, "
-                  f"Rule-only: {comparison_stats['rule_only']}, "
-                  f"Both found: {comparison_stats['both_found']}")
+            # Get LLM stats for reporting
+            llm_stats = self.llm_orchestrator.get_stats()
+            llm_redlines_count = llm_stats.get('validated_redlines', 0)
+
+            print(f"Job {job_id}: All-Claude analysis complete:")
+            print(f"  - Rule-based: {len(rule_redlines)}")
+            print(f"  - Claude validated: {llm_redlines_count}")
+            print(f"  - Total (merged): {len(all_redlines)}")
+            print(f"  - Validation rate: {llm_stats.get('validation_rate', 1.0)*100:.0f}%")
+
+            # Create comparison stats for backward compatibility
+            comparison_stats = {
+                'llm_only': llm_redlines_count,
+                'rule_only': len(rule_redlines),
+                'both_found': llm_stats.get('conflicts_resolved', 0),
+                'total': len(all_redlines)
+            }
 
             # Validate all redlines
             valid_redlines = RedlineValidator.validate_all(all_redlines, working_text)
@@ -125,26 +131,31 @@ class DocumentProcessor:
             # Update status: complete
             await self._update_status(status_callback, JobStatus.COMPLETE, 100)
 
-            # Return results with comparison statistics
+            # Return results with All-Claude statistics
             result = {
                 'job_id': job_id,
                 'status': JobStatus.COMPLETE,
                 'total_redlines': len(valid_redlines),
                 'rule_redlines': len(rule_redlines),
-                'llm_redlines': len(llm_redlines),
+                'llm_redlines': llm_redlines_count,
                 'redlines': redline_models,
                 'output_path': str(output_path),
-                'llm_stats': self.llm_orchestrator.get_stats(),
-                # NEW: Comparison statistics showing LLM vs Rules analysis
+                'llm_stats': llm_stats,
+                # All-Claude architecture statistics
                 'comparison_stats': {
-                    'llm_only_count': comparison_stats['llm_only'],
-                    'rule_only_count': comparison_stats['rule_only'],
-                    'both_found_count': comparison_stats['both_found'],
+                    'llm_validated_count': comparison_stats['llm_only'],
+                    'rule_count': comparison_stats['rule_only'],
+                    'conflicts_resolved': comparison_stats['both_found'],
                     'agreement_rate': (
                         comparison_stats['both_found'] / comparison_stats['total'] * 100
                         if comparison_stats['total'] > 0 else 0
                     ),
-                    'processing_order': 'LLM_FIRST_THEN_RULES'  # Document the new order
+                    'architecture': 'ALL_CLAUDE',
+                    'validation_rate': '100%',  # 100% validation with Sonnet
+                    'models': {
+                        'recall': llm_stats.get('opus_model', 'claude-opus'),
+                        'validation': llm_stats.get('sonnet_model', 'claude-sonnet-4')
+                    }
                 }
             }
 

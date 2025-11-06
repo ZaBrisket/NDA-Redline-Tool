@@ -51,16 +51,15 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting NDA Automated Redlining API...")
 
-    # Validate required environment variables
+    # Validate required environment variables (All-Claude architecture)
     required_env_vars = {
-        "OPENAI_API_KEY": "OpenAI API key for GPT-4o analysis",
-        "ANTHROPIC_API_KEY": "Anthropic API key for Claude validation"
+        "ANTHROPIC_API_KEY": "Anthropic API key for Claude Opus and Sonnet"
     }
 
     missing_vars = []
     for var_name, description in required_env_vars.items():
         value = os.getenv(var_name)
-        if not value or value.startswith("sk-your-") or value == "your-api-key-here":
+        if not value or value.startswith("sk-ant-your-") or value == "your-api-key-here":
             missing_vars.append(f"{var_name} ({description})")
 
     if missing_vars:
@@ -70,13 +69,13 @@ async def lifespan(app: FastAPI):
 
     # Test API connectivity (optional but recommended)
     try:
-        # Initialize LLM clients to validate API keys
-        from .core.llm_orchestrator import LLMOrchestrator
+        # Initialize All-Claude orchestrator to validate API key
+        from .core.llm_orchestrator import AllClaudeLLMOrchestrator
 
-        # This will raise ValueError if API keys are invalid
-        orchestrator = LLMOrchestrator()
-        logger.info("✓ OpenAI API key validated")
+        # This will raise ValueError if API key is invalid
+        orchestrator = AllClaudeLLMOrchestrator()
         logger.info("✓ Anthropic API key validated")
+        logger.info(f"✓ All-Claude architecture initialized (Opus: {orchestrator.opus_model}, Sonnet: {orchestrator.sonnet_model})")
 
     except ValueError as e:
         logger.error(f"API key validation failed: {e}")
@@ -119,8 +118,8 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app with modern lifespan
 app = FastAPI(
     title="NDA Automated Redlining API",
-    description="Production-grade NDA review with Word track changes",
-    version="1.0.0",
+    description="All-Claude NDA review system with 100% validation (Claude Opus + Sonnet)",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -187,20 +186,21 @@ async def health_check():
     Health check endpoint for monitoring and load balancers.
 
     Checks:
-    - API keys are configured
+    - Anthropic API key is configured (All-Claude architecture)
     - Service is running
     """
     health_status = {
         "status": "healthy",
-        "version": "1.0.0",
+        "version": "2.0.0",  # Updated for All-Claude architecture
+        "architecture": "all-claude",
         "checks": {
-            "openai_key_configured": bool(os.getenv("OPENAI_API_KEY") and not os.getenv("OPENAI_API_KEY").startswith("sk-test")),
             "anthropic_key_configured": bool(os.getenv("ANTHROPIC_API_KEY") and not os.getenv("ANTHROPIC_API_KEY").startswith("sk-ant-test")),
+            "validation_rate": "100%"
         }
     }
 
     # Check if any critical component is unhealthy
-    if not all(health_status["checks"].values()):
+    if not health_status["checks"]["anthropic_key_configured"]:
         health_status["status"] = "degraded"
 
     return health_status
