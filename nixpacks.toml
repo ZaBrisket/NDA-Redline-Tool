@@ -1,11 +1,16 @@
 # Railway deployment configuration for Python app with backend subdirectory
 [phases.setup]
-nixPkgs = ["python311", "gcc"]
+# Extend default packages with required dependencies
+nixPkgs = ["...", "python311", "gcc", "gcc-unwrapped", "zlib"]
 
 [phases.install]
 # Install dependencies from backend directory with timeout resilience
 cmds = ["cd backend && python -m venv /opt/venv && . /opt/venv/bin/activate && pip install --timeout 60 -r requirements.txt"]
 
 [start]
-# Start the application from backend directory with correct module path
-cmd = "cd backend && /opt/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"
+# Start with Gunicorn for production (Railway's startCommand will override this)
+cmd = "cd backend && /opt/venv/bin/gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120 --graceful-timeout 30 --keep-alive 5"
+
+[variables]
+# Environment variables baked into build
+PYTHONUNBUFFERED = "1"

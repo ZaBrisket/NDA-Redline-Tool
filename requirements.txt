@@ -1,7 +1,9 @@
 # Core framework
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+gunicorn==21.2.0
 pydantic==2.10.6
+pydantic-settings==2.6.0
 python-multipart==0.0.20
 python-dotenv==1.0.1
 
@@ -13,6 +15,9 @@ pyyaml==6.0.2
 # LLM APIs
 openai==1.59.7
 anthropic==0.45.1
+
+# Logging and Monitoring
+structlog==24.4.0
 
 # Testing framework
 pytest==7.4.3
