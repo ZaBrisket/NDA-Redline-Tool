@@ -33,7 +33,21 @@ class DocumentProcessor:
     def __init__(self, storage_path: str = "./storage"):
         self.storage_path = Path(storage_path)
         self.rule_engine = RuleEngine()
-        self.llm_orchestrator = LLMOrchestrator()
+        self._llm_orchestrator = None  # Lazy initialization
+
+    @property
+    def llm_orchestrator(self) -> LLMOrchestrator:
+        """Lazy initialization of LLM orchestrator"""
+        if self._llm_orchestrator is None:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY environment variable not set. "
+                    "Configure it in Railway dashboard to enable document processing."
+                )
+            self._llm_orchestrator = LLMOrchestrator(api_key=api_key)
+            logging.getLogger(__name__).info("LLM orchestrator initialized")
+        return self._llm_orchestrator
 
     async def process_document(
         self,
@@ -635,5 +649,18 @@ class JobQueue:
         }
 
 
-# Global queue instance
-job_queue = JobQueue()
+# Global queue instance (lazy initialization to avoid module-level API calls)
+job_queue = None
+
+
+def get_job_queue() -> JobQueue:
+    """
+    Lazy initialization of JobQueue singleton.
+    This prevents module-level instantiation that would fail before env vars are loaded.
+    """
+    global job_queue
+    if job_queue is None:
+        job_queue = JobQueue()
+        logger = logging.getLogger(__name__)
+        logger.info("JobQueue initialized")
+    return job_queue

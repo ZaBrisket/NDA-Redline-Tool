@@ -20,7 +20,7 @@ from .models.schemas import (
     JobStatus,
     ErrorResponse
 )
-from .workers.document_worker import job_queue
+from .workers.document_worker import get_job_queue
 
 # Configure logging FIRST before any code that uses logger
 # Normalize LOG_LEVEL to uppercase to handle case-insensitive env vars (e.g., "Info" -> "INFO")
@@ -96,6 +96,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"  - Validation rate: {os.getenv('VALIDATION_RATE', '0.15')}")
     logger.info(f"  - Confidence threshold: {os.getenv('CONFIDENCE_THRESHOLD', '95')}")
 
+    # Initialize job queue (lazy initialization)
+    try:
+        queue = get_job_queue()
+        logger.info(f"✓ JobQueue initialized ({len(queue.jobs)} existing jobs)")
+    except Exception as e:
+        logger.warning(f"JobQueue initialization deferred: {e}")
+
     logger.info("API startup complete ✓")
 
     yield  # Application runs here
@@ -106,7 +113,8 @@ async def lifespan(app: FastAPI):
     # Cleanup any pending jobs
     try:
         from .models.schemas import JobStatus
-        pending_jobs = [job for job in job_queue.jobs.values() if job.get('status') == JobStatus.QUEUED]
+        queue = get_job_queue()
+        pending_jobs = [job for job in queue.jobs.values() if job.get('status') == JobStatus.QUEUED]
         if pending_jobs:
             logger.warning(f"Cancelling {len(pending_jobs)} pending jobs on shutdown")
             for job in pending_jobs:
@@ -365,7 +373,7 @@ async def upload_document(file: UploadFile = File(...)):
             )
 
         # Submit to job queue
-        await job_queue.submit_job(job_id, str(file_path), safe_filename)
+        await get_job_queue().submit_job(job_id, str(file_path), safe_filename)
 
         return UploadResponse(
             job_id=job_id,
@@ -384,7 +392,7 @@ async def upload_document(file: UploadFile = File(...)):
 @app.get("/api/jobs/{job_id}/status")
 async def get_job_status(job_id: str):
     """Get current status of a job with proper validation"""
-    job = job_queue.get_job_status(job_id)
+    job = get_job_queue().get_job_status(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -452,7 +460,7 @@ async def job_events(job_id: str):
         last_status = None
 
         while True:
-            job = job_queue.get_job_status(job_id)
+            job = get_job_queue().get_job_status(job_id)
 
             if not job:
                 yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
@@ -502,14 +510,14 @@ async def submit_decisions(job_id: str, decisions: BatchDecision):
 
     Allows user to review and approve/reject each proposed change.
     """
-    job = job_queue.get_job_status(job_id)
+    job = get_job_queue().get_job_status(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Update decisions
     for decision in decisions.decisions:
-        job_queue.update_redline_decision(
+        get_job_queue().update_redline_decision(
             job_id,
             decision.redline_id,
             decision.decision
@@ -526,7 +534,7 @@ async def download_redlined(job_id: str, final: bool = False):
     Args:
         final: If True, export with only accepted changes
     """
-    job = job_queue.get_job_status(job_id)
+    job = get_job_queue().get_job_status(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -536,7 +544,7 @@ async def download_redlined(job_id: str, final: bool = False):
 
     if final:
         # Export with only accepted changes
-        output_path = await job_queue.export_final_document(job_id)
+        output_path = await get_job_queue().export_final_document(job_id)
         filename_suffix = "final"
     else:
         # Original redlined document with all changes
@@ -557,7 +565,7 @@ async def download_redlined(job_id: str, final: bool = False):
 async def get_stats():
     """Get processing statistics"""
     # Aggregate stats from all jobs
-    jobs = job_queue.jobs.values()
+    jobs = get_job_queue().jobs.values()
 
     total = len(jobs)
     complete = sum(1 for j in jobs if j['status'] == JobStatus.COMPLETE)
@@ -623,7 +631,7 @@ async def test_patterns(sample_text: str):
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
     """Delete a job and its files"""
-    job = job_queue.get_job_status(job_id)
+    job = get_job_queue().get_job_status(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -640,7 +648,7 @@ async def delete_job(job_id: str):
                 output_path.unlink()
 
         # Remove from queue
-        del job_queue.jobs[job_id]
+        del get_job_queue().jobs[job_id]
 
         return {"message": "Job deleted successfully"}
 
