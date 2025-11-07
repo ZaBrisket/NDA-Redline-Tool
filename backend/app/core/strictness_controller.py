@@ -38,19 +38,19 @@ class StrictnessController:
     # Pass routing thresholds by enforcement level
     ROUTING_THRESHOLDS = {
         EnforcementLevel.BLOODY: {
-            "skip_gpt5_confidence": 95,      # Skip GPT-5 if rules confidence >= 95%
+            "skip_gpt5_confidence": 95,      # Skip Claude Opus if rules confidence >= 95%
             "opus_confidence_trigger": 85,    # Route to Opus if confidence < 85%
             "consensus_required": 85,         # Consensus threshold for caching
             "enable_pass_4": True             # Always run consistency sweep
         },
         EnforcementLevel.BALANCED: {
-            "skip_gpt5_confidence": 98,      # Skip GPT-5 if rules confidence >= 98%
+            "skip_gpt5_confidence": 98,      # Skip Claude Opus if rules confidence >= 98%
             "opus_confidence_trigger": 80,    # Route to Opus if confidence < 80%
             "consensus_required": 90,         # Higher consensus required
             "enable_pass_4": True             # Run consistency sweep
         },
         EnforcementLevel.LENIENT: {
-            "skip_gpt5_confidence": 100,     # Only skip GPT-5 if 100% rule coverage
+            "skip_gpt5_confidence": 100,     # Only skip Claude Opus if 100% rule coverage
             "opus_confidence_trigger": 70,    # Only route criticals < 70%
             "consensus_required": 95,         # Highest consensus required
             "enable_pass_4": False            # Skip consistency sweep
@@ -83,11 +83,11 @@ class StrictnessController:
                             severity: Optional[str] = None) -> bool:
         """Determine if an LLM pass should be skipped"""
 
-        # Pass 1 (GPT-5) - Skip if rule confidence is high enough
+        # Pass 1 (Claude Opus) - Skip if rule confidence is high enough
         if pass_number == 1:
             skip = rule_confidence >= self.thresholds["skip_gpt5_confidence"]
             if skip:
-                logger.info(f"Skipping Pass 1 (GPT-5) - Rule confidence {rule_confidence}% >= {self.thresholds['skip_gpt5_confidence']}%")
+                logger.info(f"Skipping Pass 1 (Claude Opus) - Rule confidence {rule_confidence}% >= {self.thresholds['skip_gpt5_confidence']}%")
             return skip
 
         # Pass 3 (Opus) - Skip if confidence is high or severity not critical

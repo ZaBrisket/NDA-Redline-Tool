@@ -60,7 +60,6 @@ except ModuleNotFoundError:
     )
 
 # LLM client imports
-from openai import AsyncOpenAI
 from anthropic import AsyncAnthropic
 
 logger = logging.getLogger(__name__)
@@ -70,7 +69,7 @@ class LLMPipelineOrchestrator:
     """
     Main orchestrator for 4-pass LLM pipeline
     Pass 0: Deterministic rules
-    Pass 1: GPT-5 recall maximization
+    Pass 1: Claude Opus recall maximization
     Pass 2: Claude Sonnet validation
     Pass 3: Claude Opus adjudication
     Pass 4: Consistency sweep
@@ -93,7 +92,6 @@ class LLMPipelineOrchestrator:
             raise ValueError("ANTHROPIC_API_KEY must be provided or set in environment")
 
         # API clients
-        self.openai_client = AsyncOpenAI(api_key=openai_key)
         self.anthropic_client = AsyncAnthropic(api_key=anthropic_key)
 
         # Enforcement control - get from env if not provided
@@ -198,7 +196,7 @@ Verify required clauses are present.""",
                 1, rule_confidence
             )
 
-            # Pass 1: GPT-5 recall maximization
+            # Pass 1: Claude Opus recall maximization
             if not skip_pass1:
                 violations, pass1_result = await self._execute_pass_1(
                     request.document_text,
@@ -208,7 +206,7 @@ Verify required clauses are present.""",
             else:
                 pass_results.append(PassResult(
                     pass_number=1,
-                    pass_name="GPT-5 Recall",
+                    pass_name="Claude Opus Recall",
                     violations_in=len(violations),
                     violations_out=len(violations),
                     processing_time_ms=0,
@@ -318,7 +316,7 @@ Verify required clauses are present.""",
                              text: str,
                              existing_violations: List[ViolationSchema]
                              ) -> Tuple[List[ViolationSchema], PassResult]:
-        """Execute Pass 1: GPT-5 recall maximization with rule gating"""
+        """Execute Pass 1: Claude Opus recall maximization with rule gating"""
         start = time.time()
         gpt_violations = []
 
@@ -331,7 +329,7 @@ Verify required clauses are present.""",
             if self._should_skip_segment(segment, existing_violations):
                 continue
 
-            # Call GPT-5 with structured output
+            # Call Claude Opus with structured output
             try:
                 response = await self._call_gpt_structured(
                     segment['text'],
@@ -339,14 +337,14 @@ Verify required clauses are present.""",
                 )
                 gpt_violations.extend(response.violations)
             except Exception as e:
-                logger.error(f"GPT-5 error for segment {segment['clause_type']}: {e}")
+                logger.error(f"Claude Opus error for segment {segment['clause_type']}: {e}")
 
         # Merge violations
         all_violations = self._merge_violations(existing_violations, gpt_violations)
 
         result = PassResult(
             pass_number=1,
-            pass_name="GPT-5 Recall",
+            pass_name="Claude Opus Recall",
             violations_in=len(existing_violations),
             violations_out=len(all_violations),
             items_added=len(gpt_violations),
@@ -570,7 +568,7 @@ Verify required clauses are present.""",
     async def _call_gpt_structured(self,
                                    text: str,
                                    clause_type: ClauseType) -> GPT5Response:
-        """Call GPT-5 with structured output"""
+        """Call Claude Opus with structured output"""
 
         prompt = self.prompts['pass1_gpt']
         system_message = prompt['system']
@@ -589,8 +587,8 @@ Focus on:
 Return violations in strict JSON format."""
 
         try:
-            # Get model from environment - using GPT-5
-            model = os.getenv("GPT_MODEL", "gpt-5")
+            # Get model from environment - using Claude Opus
+            model = os.getenv("GPT_MODEL", "claude-3-opus-20240229")
             max_tokens = int(os.getenv("GPT_MAX_TOKENS", "2000"))
 
             response = await self.openai_client.chat.completions.create(
@@ -617,7 +615,7 @@ Return violations in strict JSON format."""
             )
 
         except Exception as e:
-            logger.error(f"GPT-5 structured output error: {e}")
+            logger.error(f"Claude Opus structured output error: {e}")
             # Return empty response on error
             return GPT5Response(
                 violations=[],

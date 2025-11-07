@@ -11,8 +11,10 @@ from .confidence_thresholds import (
     should_validate_high_confidence,
     get_confidence_explanation
 )
+from .settings import Settings
 
 __all__ = [
+    'Settings',
     'ConfidenceLevel',
     'ProcessingAction',
     'CONFIDENCE_THRESHOLDS',

@@ -12,7 +12,6 @@ import json
 import random
 import asyncio
 from typing import List, Dict, Optional
-from openai import AsyncOpenAI  # Changed to async client
 from anthropic import AsyncAnthropic  # Changed to async client
 
 from ..prompts.master_prompt import (
@@ -48,14 +47,13 @@ class LLMOrchestrator:
         # Initialize ASYNC clients with connection pooling
         openai_api_key = os.getenv("OPENAI_API_KEY")
         if openai_api_key:
-            self.openai_client = AsyncOpenAI(
                 api_key=openai_api_key,
                 max_retries=3,
                 timeout=30.0
             )
         else:
             self.openai_client = None
-            logger.warning("OPENAI_API_KEY not configured; GPT-5 analysis disabled")
+            logger.warning("OPENAI_API_KEY not configured; Claude Opus analysis disabled")
 
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         if anthropic_api_key:
@@ -233,11 +231,11 @@ class LLMOrchestrator:
         full_text: str
     ) -> List[Dict]:
         """
-        Analyze a single clause with GPT-5.
+        Analyze a single clause with Claude Opus.
         OPTIMIZED: Truly async OpenAI call.
         """
         if not self.openai_client:
-            logger.warning("OPENAI_API_KEY not configured; skipping GPT-5 clause analysis")
+            logger.warning("OPENAI_API_KEY not configured; skipping Claude Opus clause analysis")
             return []
 
         try:
@@ -266,7 +264,7 @@ Return as JSON matching the schema.
             ]
 
             # Get model from environment
-            model = os.getenv("GPT_MODEL", "gpt-4")  # Note: Changed default to gpt-4
+            model = os.getenv("GPT_MODEL", "claude-3-opus-20240229")  # Note: Changed default to claude-3-opus-20240229
 
             # ASYNC OpenAI call - no longer blocks event loop
             response = await self.openai_client.chat.completions.create(
@@ -295,7 +293,7 @@ Return as JSON matching the schema.
             return violations
 
         except Exception as e:
-            logger.error(f"GPT-5 clause analysis error: {e}")
+            logger.error(f"Claude Opus clause analysis error: {e}")
             return []
 
     async def _validate_with_claude_async(
@@ -386,7 +384,7 @@ Return as JSON matching the schema.
                     {"role": "user", "content": prompt}
                 ]
 
-                model = os.getenv("GPT_MODEL", "gpt-4")
+                model = os.getenv("GPT_MODEL", "claude-3-opus-20240229")
 
                 response = await self.openai_client.chat.completions.create(
                     model=model,
