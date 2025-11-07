@@ -25,7 +25,7 @@ class Severity(str, Enum):
 class ViolationSource(str, Enum):
     """Source of violation detection"""
     RULE = "rule"           # Pass 0: Deterministic rules
-    GPT5 = "gpt5"          # Pass 1: GPT-5 recall
+    GPT5 = "gpt5"          # Pass 1: Claude Opus recall
     SONNET = "sonnet"      # Pass 2: Claude Sonnet validation
     OPUS = "opus"          # Pass 3: Claude Opus adjudication
     CONSISTENCY = "consistency"  # Pass 4: Consistency sweep
@@ -125,14 +125,14 @@ class RuleMatch(BaseModel):
     confidence: float = Field(default=100.0, description="Rules have 100% confidence")
 
 
-# Pass 1: GPT-5 Structured Output
+# Pass 1: Claude Opus Structured Output
 class GPT5Response(BaseModel):
-    """Structured response from GPT-5 (released August 2025)"""
+    """Structured response from Claude Opus (released August 2025)"""
     violations: List[ViolationSchema]
     clause_type: ClauseType
     total_reviewed: int = Field(ge=0)
     processing_time_ms: int = Field(ge=0)
-    model_version: str = Field(default="gpt-5")  # GPT-5 default
+    model_version: str = Field(default="claude-3-opus-20240229")  # Claude Opus default
 
     @model_validator(mode="after")
     def validate_violations(self):

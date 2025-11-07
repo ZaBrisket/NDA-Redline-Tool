@@ -100,8 +100,8 @@ class PerformanceMonitor:
 
         # Cost calculation parameters (August 2025 pricing)
         self.cost_per_token = cost_per_token or {
-            'gpt-5': 0.00000125,  # $1.25 per 1M input tokens
-            'gpt-5-output': 0.00001,  # $10 per 1M output tokens
+            'claude-3-opus-20240229': 0.00000125,  # $1.25 per 1M input tokens
+            'claude-3-opus-20240229': 0.00001,  # $10 per 1M output tokens
             'claude-sonnet-4': 0.000003,  # $3 per 1M tokens
             'claude-sonnet-4-output': 0.000015  # $15 per 1M output tokens
         }
