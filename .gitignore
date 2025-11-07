@@ -109,3 +109,8 @@ docker-volumes/
 *.key
 *.crt
 *.pfx
+
+# Backup files
+*_backup_*.py
+backup_before_cleanup_*.tar.gz
+*.bak
