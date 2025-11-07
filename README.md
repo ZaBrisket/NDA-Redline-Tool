@@ -203,7 +203,7 @@ If you encounter deployment issues:
    - `railway.json` uses: `cd backend && /opt/venv/bin/uvicorn app.main:app`
    - **NOT**: `uvicorn backend.app.main:app` (this will fail)
 
-2. **Healthcheck Timeout**: Set healthcheck timeout to at least 30 seconds in Railway dashboard
+2. **Healthcheck Timeout**: Set healthcheck timeout to at least 60 seconds in Railway dashboard to accommodate slower cold starts
 
 3. **Build Succeeds but Runtime Fails**: This indicates a module path or startup command issue. Check the Railway logs for import errors.
 

@@ -3,8 +3,8 @@
 nixPkgs = ["python311", "gcc"]
 
 [phases.install]
-# Install dependencies from backend directory
-cmds = ["cd backend && python -m venv /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"]
+# Install dependencies from backend directory with timeout resilience
+cmds = ["cd backend && python -m venv /opt/venv && . /opt/venv/bin/activate && pip install --timeout 60 -r requirements.txt"]
 
 [start]
 # Start the application from backend directory with correct module path
