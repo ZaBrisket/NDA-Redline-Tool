@@ -1,6 +1,11 @@
-# Nixpacks configuration for Railway deployment
-# The presence of requirements.txt will auto-detect Python
+# Railway deployment configuration for Python app with backend subdirectory
+[phases.setup]
+nixPkgs = ["python311", "gcc"]
+
+[phases.install]
+# Install dependencies from backend directory with timeout resilience
+cmds = ["cd backend && python -m venv /opt/venv && . /opt/venv/bin/activate && pip install --timeout 60 -r requirements.txt"]
 
 [start]
-# Start command for the FastAPI application
-cmd = "cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+# Start the application from backend directory with correct module path
+cmd = "cd backend && /opt/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"

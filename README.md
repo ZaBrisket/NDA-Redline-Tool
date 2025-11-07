@@ -168,6 +168,103 @@ curl "http://localhost:8000/api/jobs/{job_id}/download?final=true" \
   -o final.docx
 ```
 
+## 🚢 Railway Deployment
+
+### Module Path Configuration
+
+This application uses a `nixpacks.toml` configuration to handle the backend subdirectory structure. The configuration ensures:
+- Dependencies are installed from the `backend/` directory
+- The application starts with the correct Python module path (`app.main:app`, not `backend.app.main:app`)
+- Virtual environment is properly activated
+
+### Prerequisites
+
+Before deploying to Railway:
+
+1. **Environment Variables** - Set in Railway dashboard:
+   ```
+   OPENAI_API_KEY=sk-...
+   ANTHROPIC_API_KEY=sk-ant-...
+   USE_PROMPT_CACHING=true
+   VALIDATION_RATE=0.15
+   CONFIDENCE_THRESHOLD=95
+   ```
+
+2. **Configuration Files** - Ensure these exist in repository root:
+   - `nixpacks.toml` - Deployment build and start configuration
+   - `railway.json` - Railway-specific deployment settings
+
+### Common Deployment Issues
+
+If you encounter deployment issues:
+
+1. **Module Import Path Error**: The most common issue is the module path mismatch. Ensure:
+   - `nixpacks.toml` uses: `cd backend && /opt/venv/bin/uvicorn app.main:app`
+   - `railway.json` uses: `cd backend && /opt/venv/bin/uvicorn app.main:app`
+   - **NOT**: `uvicorn backend.app.main:app` (this will fail)
+
+2. **Healthcheck Timeout**: Set healthcheck timeout to at least 60 seconds in Railway dashboard to accommodate slower cold starts
+
+3. **Build Succeeds but Runtime Fails**: This indicates a module path or startup command issue. Check the Railway logs for import errors.
+
+### Verification
+
+After deployment, verify your Railway instance is working:
+
+```bash
+python scripts/verify_deployment.py
+```
+
+This script will:
+- Check the health endpoint (`/`)
+- Test the API stats endpoint (`/api/stats`)
+- Confirm the service is responding correctly
+
+Example output:
+```
+🔍 Checking deployment health...
+
+1. Health Check:
+   ✅ Service is healthy
+   Response: {"service": "NDA Automated Redlining", "status": "healthy"}
+
+2. API Stats Endpoint:
+   ✅ API is responding correctly
+   Stats: {"total_documents": 0, "successful": 0, "failed": 0}
+
+✨ Deployment verification complete!
+Your Railway deployment is working correctly!
+```
+
+### Deployment Process
+
+1. **Push to GitHub**:
+   ```bash
+   git add .
+   git commit -m "Your commit message"
+   git push origin main
+   ```
+
+2. **Railway Auto-Deploy**:
+   - Railway will automatically detect the push
+   - Build phase: ~2-3 minutes
+   - Deployment: ~30 seconds
+   - Total time: ~3-4 minutes
+
+3. **Monitor Deployment**:
+   - Watch Railway dashboard for build progress
+   - Check logs for any errors
+   - Wait for healthcheck to pass
+
+4. **Test Live Deployment**:
+   ```bash
+   # Test health endpoint
+   curl https://your-app.up.railway.app/
+
+   # Test stats endpoint
+   curl https://your-app.up.railway.app/api/stats
+   ```
+
 ## 🧪 Testing
 
 ### Test Against Training Corpus
