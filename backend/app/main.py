@@ -51,6 +51,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting NDA Automated Redlining API...")
 
     # Validate required environment variables (All-Claude architecture)
+    # NOTE: We log warnings but don't prevent startup - this allows the service
+    # to start for health checks. API calls will fail gracefully with proper error messages.
     required_env_vars = {
         "ANTHROPIC_API_KEY": "Anthropic API key for Claude Opus and Sonnet"
     }
@@ -58,31 +60,34 @@ async def lifespan(app: FastAPI):
     missing_vars = []
     for var_name, description in required_env_vars.items():
         value = os.getenv(var_name)
-        if not value or value.startswith("sk-ant-your-") or value == "your-api-key-here":
+        # Check for missing, placeholder, or invalid keys
+        if not value or value.startswith("sk-ant-your-") or value.startswith("sk-ant-api03-YOUR") or value == "your-api-key-here":
             missing_vars.append(f"{var_name} ({description})")
 
     if missing_vars:
-        error_msg = "Missing or invalid required environment variables:\n" + "\n".join(f"  - {var}" for var in missing_vars)
-        logger.error(error_msg)
-        raise ValueError(error_msg)
+        error_msg = "⚠️  WARNING: Missing or invalid environment variables (service will start but API calls will fail):\n" + "\n".join(f"  - {var}" for var in missing_vars)
+        logger.warning(error_msg)
+        logger.warning("Configure proper API keys in Railway dashboard to enable document processing")
+        # Don't raise - allow service to start for health checks
+    else:
+        # Only test API connectivity if keys are configured
+        try:
+            # Initialize All-Claude orchestrator to validate API key
+            from .core.llm_orchestrator import AllClaudeLLMOrchestrator
 
-    # Test API connectivity (optional but recommended)
-    try:
-        # Initialize All-Claude orchestrator to validate API key
-        from .core.llm_orchestrator import AllClaudeLLMOrchestrator
+            # This will raise ValueError if API key is invalid
+            orchestrator = AllClaudeLLMOrchestrator()
+            logger.info("✓ Anthropic API key validated")
+            logger.info(f"✓ All-Claude architecture initialized (Opus: {orchestrator.opus_model}, Sonnet: {orchestrator.sonnet_model})")
 
-        # This will raise ValueError if API key is invalid
-        orchestrator = AllClaudeLLMOrchestrator()
-        logger.info("✓ Anthropic API key validated")
-        logger.info(f"✓ All-Claude architecture initialized (Opus: {orchestrator.opus_model}, Sonnet: {orchestrator.sonnet_model})")
+        except ValueError as e:
+            logger.warning(f"⚠️  API key validation failed (non-fatal): {e}")
+            logger.warning("Service will start but document processing will fail until keys are configured")
+            # Don't raise - allow service to start
 
-    except ValueError as e:
-        logger.error(f"API key validation failed: {e}")
-        raise
-
-    except Exception as e:
-        logger.warning(f"API connectivity check failed (non-fatal): {e}")
-        # Don't raise - connectivity issues might be temporary
+        except Exception as e:
+            logger.warning(f"⚠️  API connectivity check failed (non-fatal): {e}")
+            # Don't raise - connectivity issues might be temporary
 
     # Log configuration
     logger.info(f"Configuration:")
@@ -188,19 +193,32 @@ async def health_check():
     - Anthropic API key is configured (All-Claude architecture)
     - Service is running
     """
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    # Check if API key is configured and not a placeholder
+    key_configured = bool(
+        api_key
+        and not api_key.startswith("sk-ant-test")
+        and not api_key.startswith("sk-ant-your-")
+        and not api_key.startswith("sk-ant-api03-YOUR")
+        and api_key != "your-api-key-here"
+    )
+
     health_status = {
-        "status": "healthy",
+        "status": "healthy",  # Service is running
         "version": "2.0.0",  # Updated for All-Claude architecture
         "architecture": "all-claude",
         "checks": {
-            "anthropic_key_configured": bool(os.getenv("ANTHROPIC_API_KEY") and not os.getenv("ANTHROPIC_API_KEY").startswith("sk-ant-test")),
+            "service_running": True,
+            "anthropic_key_configured": key_configured,
             "validation_rate": "100%"
         }
     }
 
-    # Check if any critical component is unhealthy
-    if not health_status["checks"]["anthropic_key_configured"]:
+    # If API key is not configured, mark as degraded but still healthy for load balancer
+    # (service is running, just not fully functional)
+    if not key_configured:
         health_status["status"] = "degraded"
+        health_status["message"] = "Service running but API keys not configured. Configure ANTHROPIC_API_KEY to enable document processing."
 
     return health_status
 
