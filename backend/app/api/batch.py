@@ -33,12 +33,30 @@ class BatchProcessor:
     Processes unique clauses once and applies results across all documents.
     """
 
-    def __init__(self):
+    def __init__(self, orchestrator=None):
         self.semantic_cache = get_semantic_cache()
         self.rule_engine = RuleEngine()
-        self.llm_orchestrator = LLMOrchestrator()
+        # Lazy initialization - orchestrator will be initialized on first use
+        self._llm_orchestrator = orchestrator
+        self._orchestrator_initialized = orchestrator is not None
         self.storage_path = Path("./storage")
         self.max_batch_size = int(os.getenv("MAX_BATCH_SIZE", "100"))
+
+    @property
+    def llm_orchestrator(self):
+        """Lazy-load orchestrator with proper API key"""
+        if not self._orchestrator_initialized:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY not configured. "
+                    "Set environment variable or pass orchestrator to BatchProcessor"
+                )
+            # Import here to avoid circular dependencies
+            from ..core.llm_orchestrator import LLMOrchestrator
+            self._llm_orchestrator = LLMOrchestrator(api_key=api_key)
+            self._orchestrator_initialized = True
+        return self._llm_orchestrator
 
     async def process_batch(
         self,

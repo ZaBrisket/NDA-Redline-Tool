@@ -1,7 +1,7 @@
 """
 FastAPI backend for NDA automated redlining
 """
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from contextlib import asynccontextmanager
@@ -48,46 +48,53 @@ except ImportError as e:
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events using modern lifespan pattern"""
     # Startup
+    logger.info("=== Application Startup ===")
     logger.info("Starting NDA Automated Redlining API...")
 
+    # Log environment info
+    logger.info(f"PORT: {os.getenv('PORT', '8000')}")
+    logger.info(f"RAILWAY_ENVIRONMENT: {os.getenv('RAILWAY_ENVIRONMENT_NAME', 'development')}")
+
     # Validate required environment variables (All-Claude architecture)
-    # NOTE: We log warnings but don't prevent startup - this allows the service
-    # to start for health checks. API calls will fail gracefully with proper error messages.
-    required_env_vars = {
-        "ANTHROPIC_API_KEY": "Anthropic API key for Claude Opus and Sonnet"
-    }
+    api_key = os.getenv("ANTHROPIC_API_KEY")
 
-    missing_vars = []
-    for var_name, description in required_env_vars.items():
-        value = os.getenv(var_name)
-        # Check for missing, placeholder, or invalid keys
-        if not value or value.startswith("sk-ant-your-") or value.startswith("sk-ant-api03-YOUR") or value == "your-api-key-here":
-            missing_vars.append(f"{var_name} ({description})")
-
-    if missing_vars:
-        error_msg = "⚠️  WARNING: Missing or invalid environment variables (service will start but API calls will fail):\n" + "\n".join(f"  - {var}" for var in missing_vars)
-        logger.warning(error_msg)
-        logger.warning("Configure proper API keys in Railway dashboard to enable document processing")
+    # Check if API key is present
+    if not api_key:
+        error_msg = (
+            "ANTHROPIC_API_KEY environment variable not set. "
+            "Check Railway dashboard Variables tab and ensure changes are deployed."
+        )
+        logger.error(error_msg)
+        logger.warning("Service will start in degraded mode - API calls will fail until key is configured")
         # Don't raise - allow service to start for health checks
+        app.state.orchestrator = None
     else:
-        # Only test API connectivity if keys are configured
-        try:
-            # Initialize All-Claude orchestrator to validate API key
-            from .core.llm_orchestrator import AllClaudeLLMOrchestrator
+        # Check for placeholder keys
+        if api_key.startswith("sk-ant-your-") or api_key.startswith("sk-ant-api03-YOUR") or api_key == "your-api-key-here":
+            logger.error("ANTHROPIC_API_KEY contains placeholder value")
+            logger.warning("Service will start in degraded mode - configure real API key in Railway dashboard")
+            app.state.orchestrator = None
+        else:
+            # API key looks valid - initialize orchestrator
+            logger.info(f"API key found: {api_key[:10]}... (truncated)")
 
-            # This will raise ValueError if API key is invalid
-            orchestrator = AllClaudeLLMOrchestrator()
-            logger.info("✓ Anthropic API key validated")
-            logger.info(f"✓ All-Claude architecture initialized (Opus: {orchestrator.opus_model}, Sonnet: {orchestrator.sonnet_model})")
+            try:
+                # Initialize All-Claude orchestrator with explicit API key
+                from .core.llm_orchestrator import AllClaudeLLMOrchestrator
 
-        except ValueError as e:
-            logger.warning(f"⚠️  API key validation failed (non-fatal): {e}")
-            logger.warning("Service will start but document processing will fail until keys are configured")
-            # Don't raise - allow service to start
+                app.state.orchestrator = AllClaudeLLMOrchestrator(api_key=api_key)
+                logger.info("✅ Orchestrator initialized successfully")
+                logger.info("✅ Anthropic client ready")
 
-        except Exception as e:
-            logger.warning(f"⚠️  API connectivity check failed (non-fatal): {e}")
-            # Don't raise - connectivity issues might be temporary
+            except ValueError as e:
+                logger.error(f"❌ Invalid API key format: {e}")
+                logger.warning("Service will start in degraded mode")
+                app.state.orchestrator = None
+
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize orchestrator: {e}", exc_info=True)
+                logger.warning("Service will start in degraded mode")
+                app.state.orchestrator = None
 
     # Log configuration
     logger.info(f"Configuration:")
@@ -95,13 +102,24 @@ async def lifespan(app: FastAPI):
     logger.info(f"  - Retention days: {os.getenv('RETENTION_DAYS', 7)}")
     logger.info(f"  - Validation rate: {os.getenv('VALIDATION_RATE', '0.15')}")
     logger.info(f"  - Confidence threshold: {os.getenv('CONFIDENCE_THRESHOLD', '95')}")
+    logger.info(f"  - Orchestrator status: {'initialized' if app.state.orchestrator else 'not initialized (degraded mode)'}")
 
     logger.info("API startup complete ✓")
 
     yield  # Application runs here
 
     # Shutdown
+    logger.info("=== Application Shutdown ===")
     logger.info("Shutting down NDA Automated Redlining API...")
+
+    # Cleanup orchestrator if initialized
+    if hasattr(app.state, 'orchestrator') and app.state.orchestrator:
+        try:
+            if hasattr(app.state.orchestrator, 'client') and hasattr(app.state.orchestrator.client, 'close'):
+                await app.state.orchestrator.client.close()
+                logger.info("Anthropic client closed")
+        except Exception as e:
+            logger.error(f"Error closing Anthropic client: {e}")
 
     # Cleanup any pending jobs
     try:
@@ -174,6 +192,29 @@ MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024  # 1MB chunks for streaming
 
 
+# Dependency injection for orchestrator access
+def get_orchestrator(request: Request):
+    """
+    Dependency injection to access orchestrator from app.state
+
+    Raises:
+        HTTPException: 503 if orchestrator not initialized
+    """
+    if not hasattr(request.app.state, "orchestrator"):
+        raise HTTPException(
+            status_code=503,
+            detail="Service not ready - orchestrator not initialized"
+        )
+
+    if request.app.state.orchestrator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Service in degraded mode - ANTHROPIC_API_KEY not configured"
+        )
+
+    return request.app.state.orchestrator
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -185,42 +226,73 @@ async def root():
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     """
-    Health check endpoint for monitoring and load balancers.
+    Health check endpoint for Railway deployment verification.
+
+    Returns 200 if service is running (even in degraded mode).
+    This allows Railway health checks to pass while still indicating configuration status.
 
     Checks:
-    - Anthropic API key is configured (All-Claude architecture)
     - Service is running
+    - Orchestrator initialization status
+    - API key configuration status
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    # Check if API key is configured and not a placeholder
-    key_configured = bool(
-        api_key
-        and not api_key.startswith("sk-ant-test")
-        and not api_key.startswith("sk-ant-your-")
-        and not api_key.startswith("sk-ant-api03-YOUR")
-        and api_key != "your-api-key-here"
-    )
+    from datetime import datetime
 
-    health_status = {
-        "status": "healthy",  # Service is running
-        "version": "2.0.0",  # Updated for All-Claude architecture
+    health_data = {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "2.0.0",
         "architecture": "all-claude",
         "checks": {
-            "service_running": True,
-            "anthropic_key_configured": key_configured,
-            "validation_rate": "100%"
+            "service_running": True
         }
     }
 
-    # If API key is not configured, mark as degraded but still healthy for load balancer
-    # (service is running, just not fully functional)
-    if not key_configured:
-        health_status["status"] = "degraded"
-        health_status["message"] = "Service running but API keys not configured. Configure ANTHROPIC_API_KEY to enable document processing."
+    # Check orchestrator initialization
+    if hasattr(request.app.state, "orchestrator"):
+        if request.app.state.orchestrator is not None:
+            health_data["checks"]["orchestrator"] = "initialized"
+            health_data["checks"]["api_key"] = "configured"
+        else:
+            health_data["status"] = "degraded"
+            health_data["checks"]["orchestrator"] = "not_initialized"
+            health_data["checks"]["api_key"] = "not_configured"
+            health_data["message"] = "Service in degraded mode - ANTHROPIC_API_KEY not configured. Configure in Railway dashboard."
+    else:
+        health_data["status"] = "degraded"
+        health_data["checks"]["orchestrator"] = "missing"
+        health_data["message"] = "Service starting up - orchestrator not yet initialized"
 
-    return health_status
+    return health_data
+
+
+@app.get("/ready")
+async def readiness_check(request: Request):
+    """
+    Kubernetes-style readiness check.
+
+    Returns 200 only if service is fully operational with API keys configured.
+    Returns 503 if in degraded mode without API keys.
+    """
+    if not hasattr(request.app.state, "orchestrator"):
+        raise HTTPException(
+            status_code=503,
+            detail="Not ready - orchestrator not initialized"
+        )
+
+    if request.app.state.orchestrator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Not ready - API key not configured"
+        )
+
+    return {
+        "status": "ready",
+        "orchestrator": "initialized",
+        "api_configured": True
+    }
 
 
 def sanitize_filename(filename: str, max_length: int = 255) -> str:
