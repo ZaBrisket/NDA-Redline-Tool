@@ -69,11 +69,6 @@ COPY --from=builder /opt/venv /opt/venv
 # Ensure proper ownership for the non-root user
 COPY --chown=appuser:appuser backend/ /app/backend/
 
-# Copy configuration files to root directory
-# These are needed for the application to find its config
-COPY --chown=appuser:appuser Procfile /app/
-COPY --chown=appuser:appuser railway.json /app/
-
 # Ensure virtual environment is in PATH
 ENV PATH="/opt/venv/bin:$PATH"
 
