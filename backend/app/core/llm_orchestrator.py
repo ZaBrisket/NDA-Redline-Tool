@@ -726,78 +726,98 @@ Respond with a JSON object containing:
         NEVER returns None - always returns a dict with a 'redlines' list (possibly empty).
         """
         try:
-            # Log the raw response for debugging (truncated)
             logger.debug(
                 "Parsing Claude response",
                 response_length=len(response_text),
-                response_preview=response_text[:200]
+                response_preview=response_text[:200],
             )
 
             parsed = None
 
-            # 1) Try to parse as direct JSON
-            if response_text.strip().startswith('{'):
-                parsed = json.loads(response_text)
+            # 1) Try direct JSON
+            text = response_text.strip()
+            if text.startswith("{"):
+                parsed = json.loads(text)
 
-            # 2) Try to extract JSON from markdown code blocks
+            # 2) Try JSON inside markdown code fences
             if parsed is None:
                 import re
-                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+                json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
                 if json_match:
                     parsed = json.loads(json_match.group(1))
 
-            # If we successfully parsed JSON, validate it has a redlines list
+            # 3) If we got JSON, normalize to {'redlines': [...]}
             if parsed is not None:
-                if 'redlines' in parsed and isinstance(parsed['redlines'], list):
-                    logger.info(f"Successfully parsed JSON response with {len(parsed['redlines'])} redlines")
-                    return parsed
+                redlines = parsed.get("redlines")
+                if isinstance(redlines, list):
+                    logger.info(
+                        f"Successfully parsed JSON response with {len(redlines)} redlines"
+                    )
+                    return {"redlines": redlines}
                 else:
-                    logger.warning("JSON parsed but missing 'redlines' key or not a list, returning empty")
-                    return {'redlines': []}
+                    logger.warning(
+                        "JSON parsed but missing 'redlines' key or not a list, returning empty"
+                    )
+                    return {"redlines": []}
 
-            # 3) Fallback: Create structured response from text
-            logger.warning("Claude response not in JSON format, attempting text parsing fallback")
-            lines = response_text.strip().split('\n')
+            # 4) Fallback: structured text parsing
+            logger.warning(
+                "Claude response not in JSON format, attempting text parsing fallback"
+            )
+            lines = text.split("\n")
             redlines = []
-            current_redline = {}
+            current = {}
 
             for line in lines:
-                if line.strip():
-                    if 'clause' in line.lower() or 'section' in line.lower():
-                        if current_redline:
-                            redlines.append(current_redline)
-                        current_redline = {'clause': line.strip()}
-                    elif 'issue' in line.lower() or 'problem' in line.lower():
-                        current_redline['issue'] = line.strip()
-                    elif 'recommendation' in line.lower():
-                        current_redline['recommendation'] = line.strip()
+                line = line.strip()
+                if not line:
+                    continue
 
-            if current_redline:
-                redlines.append(current_redline)
+                lower = line.lower()
+                if "clause" in lower or "section" in lower:
+                    if current:
+                        redlines.append(current)
+                        current = {}
+                    current["clause"] = line
+                elif "issue" in lower or "problem" in lower:
+                    current["issue"] = line
+                elif "severity" in lower:
+                    current["severity"] = line.split(":", 1)[-1].strip().lower()
+                elif "recommendation" in lower:
+                    current["recommendation"] = line
+                elif "explanation" in lower:
+                    current["explanation"] = line
+
+            if current:
+                redlines.append(current)
 
             if redlines:
-                logger.info(f"Text parsing fallback succeeded with {len(redlines)} redlines")
-                return {'redlines': redlines}
+                logger.info(
+                    f"Text parsing fallback succeeded with {len(redlines)} redlines"
+                )
+                return {"redlines": redlines}
             else:
-                logger.warning("Text parsing fallback found no redlines, returning empty")
-                return {'redlines': []}
+                logger.warning(
+                    "Text parsing fallback found no redlines, returning empty"
+                )
+                return {"redlines": []}
 
         except json.JSONDecodeError as e:
             logger.error(
                 "JSON parsing failed",
                 error=str(e),
-                response_preview=response_text[:500]
+                response_preview=response_text[:500],
             )
-            return {'redlines': []}
+            return {"redlines": []}
 
         except Exception as e:
             logger.error(
                 "Unexpected error parsing Claude response",
                 error=str(e),
                 error_type=type(e).__name__,
-                response_preview=response_text[:500]
+                response_preview=response_text[:500],
             )
-            return {'redlines': []}
+            return {"redlines": []}
 
     def _parse_validation_response(self, response_text: str) -> Dict:
         """Parse Sonnet's validation response"""
