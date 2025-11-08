@@ -115,7 +115,7 @@ class DocumentProcessor:
                 # Defensive check: ensure all_redlines is a list
                 if not isinstance(all_redlines, list):
                     logging.getLogger(__name__).warning(
-                        f"Job {job_id}: LLM orchestrator returned non-list result, treating as empty"
+                        f"Job {job_id}: LLM orchestrator returned {type(all_redlines).__name__}, treating as empty list"
                     )
                     all_redlines = []
 
@@ -139,15 +139,20 @@ class DocumentProcessor:
             if not llm_error_occurred:
                 llm_stats = self.llm_orchestrator.get_stats()
                 llm_redlines_count = llm_stats.get('validated_redlines', 0)
+
+                print(f"Job {job_id}: All-Claude analysis complete:")
+                print(f"  - Rule-based: {len(rule_redlines)}")
+                print(f"  - Claude validated: {llm_redlines_count}")
+                print(f"  - Total (merged): {len(all_redlines)}")
+                print(f"  - Validation rate: {llm_stats.get('validation_rate', 1.0)*100:.0f}%")
             else:
                 llm_stats = {'error': 'LLM analysis failed'}
                 llm_redlines_count = 0
 
-            print(f"Job {job_id}: All-Claude analysis complete:")
-            print(f"  - Rule-based: {len(rule_redlines)}")
-            print(f"  - Claude validated: {llm_redlines_count}")
-            print(f"  - Total (merged): {len(all_redlines)}")
-            print(f"  - Validation rate: {llm_stats.get('validation_rate', 1.0)*100:.0f}%")
+                print(f"Job {job_id}: Completed with rule-based redlines only (LLM failed):")
+                print(f"  - Rule-based: {len(rule_redlines)}")
+                print(f"  - Total: {len(all_redlines)}")
+                print(f"  - Note: Falling back to deterministic rules due to LLM error")
 
             # Create comparison stats for backward compatibility
             comparison_stats = {

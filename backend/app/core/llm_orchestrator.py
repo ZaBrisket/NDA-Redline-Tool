@@ -267,24 +267,15 @@ class AnthropicExclusiveOrchestrator:
             self.stats['failed_requests'] += 1
             processing_time = time.time() - start_time
 
-            # Create user-friendly error message
+            # Create user-friendly error message for the exception
             user_friendly_error = self._get_user_friendly_error(e)
-
-            error_result = {
-                'status': 'error',
-                'error': user_friendly_error,
-                'error_type': type(e).__name__,
-                'technical_details': str(e),
-                'correlation_id': correlation_id,
-                'processing_time': processing_time,
-                'stats_snapshot': self._get_stats_snapshot()
-            }
 
             logger.error(
                 "Document analysis failed",
                 error=str(e),
                 error_type=type(e).__name__,
                 processing_time=processing_time,
+                correlation_id=correlation_id,
                 exc_info=True
             )
 
@@ -302,8 +293,7 @@ class AnthropicExclusiveOrchestrator:
                 except Exception:
                     pass  # Don't fail on Sentry errors
 
-            # Instead of raising, return error result for graceful handling
-            # The caller can decide whether to treat this as fatal
+            # Raise user-friendly error for document_worker to catch and handle gracefully
             raise RuntimeError(user_friendly_error) from e
         finally:
             try:
@@ -733,7 +723,7 @@ Respond with a JSON object containing:
     def _parse_claude_response(self, response_text: str) -> Dict:
         """
         Parse Claude's response, handling both JSON and text formats.
-        NEVER returns None - always returns at least {'redlines': []} for safety.
+        NEVER returns None - always returns a dict with a 'redlines' list (possibly empty).
         """
         try:
             # Log the raw response for debugging (truncated)
@@ -743,30 +733,29 @@ Respond with a JSON object containing:
                 response_preview=response_text[:200]
             )
 
-            # Try to parse as JSON first
+            parsed = None
+
+            # 1) Try to parse as direct JSON
             if response_text.strip().startswith('{'):
                 parsed = json.loads(response_text)
-                # Validate that it has the redlines key
-                if 'redlines' in parsed:
+
+            # 2) Try to extract JSON from markdown code blocks
+            if parsed is None:
+                import re
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+                if json_match:
+                    parsed = json.loads(json_match.group(1))
+
+            # If we successfully parsed JSON, validate it has a redlines list
+            if parsed is not None:
+                if 'redlines' in parsed and isinstance(parsed['redlines'], list):
                     logger.info(f"Successfully parsed JSON response with {len(parsed['redlines'])} redlines")
                     return parsed
                 else:
-                    logger.warning("JSON parsed but missing 'redlines' key, returning empty")
+                    logger.warning("JSON parsed but missing 'redlines' key or not a list, returning empty")
                     return {'redlines': []}
 
-            # Try to extract JSON from markdown code blocks
-            import re
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group(1))
-                if 'redlines' in parsed:
-                    logger.info(f"Extracted JSON from markdown with {len(parsed['redlines'])} redlines")
-                    return parsed
-                else:
-                    logger.warning("Extracted JSON missing 'redlines' key, returning empty")
-                    return {'redlines': []}
-
-            # Fallback: Create structured response from text
+            # 3) Fallback: Create structured response from text
             logger.warning("Claude response not in JSON format, attempting text parsing fallback")
             lines = response_text.strip().split('\n')
             redlines = []
