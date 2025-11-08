@@ -143,21 +143,21 @@ rules:
     explanation: "Narrow non-solicitation scope to key executives only"
 
   # AFFILIATE REMOVAL - Moderate (Context-sensitive)
-  - id: remove_affiliate_references
-    type: affiliate_clause
-    pattern: '\b(?:and|or|including)\s+(?:its|our|their)\s+affiliates?\b'
-    severity: moderate
-    action: delete
-    context_required: '(?<!portfolio|investment|fund)'
-    explanation: "Remove affiliate references (except in PE context)"
+  # Note: These rules are disabled because they require negative context matching
+  # which is better handled by the LLM to avoid false positives in PE contexts
+  # - id: remove_affiliate_references
+  #   type: affiliate_clause
+  #   pattern: '\b(?:and|or|including)\s+(?:its|our|their)\s+affiliates?\b'
+  #   severity: moderate
+  #   action: delete
+  #   explanation: "Remove affiliate references (except in PE context)"
 
-  - id: remove_affiliate_standalone
-    type: affiliate_clause
-    pattern: ',?\s*(?:subsidiaries|affiliates|parents|related\s+entities),?\s*'
-    severity: moderate
-    action: delete
-    context_required: '(?<!portfolio|investment|fund)'
-    explanation: "Remove affiliate/subsidiary references (except in PE context)"
+  # - id: remove_affiliate_standalone
+  #   type: affiliate_clause
+  #   pattern: ',?\s*(?:subsidiaries|affiliates|parents|related\s+entities),?\s*'
+  #   severity: moderate
+  #   action: delete
+  #   explanation: "Remove affiliate/subsidiary references (except in PE context)"
 
   # NEW - Portfolio Company Carveout for PE Context (Found in multiple training instances)
   - id: portfolio_company_affiliate_carveout

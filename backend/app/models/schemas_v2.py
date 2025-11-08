@@ -203,7 +203,7 @@ class ConsistencyCheck(BaseModel):
     needs_correction: bool
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "banned_tokens_found": [
                     {"token": "perpetual", "location": 1234, "context": "...perpetual confidentiality..."}

@@ -598,31 +598,73 @@ async def download_redlined(job_id: str, final: bool = False):
     Args:
         final: If True, export with only accepted changes
     """
-    job = job_queue.get_job_status(job_id)
+    try:
+        logger.info(f"Download request for job_id={job_id}, final={final}")
 
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        job = job_queue.get_job_status(job_id)
 
-    if job['status'] != JobStatus.COMPLETE:
-        raise HTTPException(status_code=400, detail="Job not complete")
+        if not job:
+            logger.error(f"Job not found: {job_id}")
+            raise HTTPException(status_code=404, detail="Job not found")
 
-    if final:
-        # Export with only accepted changes
-        output_path = await job_queue.export_final_document(job_id)
-        filename_suffix = "final"
-    else:
-        # Original redlined document with all changes
-        output_path = Path(job['result']['output_path'])
-        filename_suffix = "redlined"
+        # Log detailed job status
+        logger.info(f"Job {job_id} status: {job.get('status')}, "
+                   f"filename: {job.get('filename')}, "
+                   f"has_result: {bool(job.get('result'))}")
 
-    if not output_path or not output_path.exists():
-        raise HTTPException(status_code=404, detail="Output file not found")
+        if job.get('result'):
+            result = job['result']
+            logger.info(f"Job {job_id} redlines: total={result.get('total_redlines', 0)}, "
+                       f"rule_based={result.get('rule_redlines', 0)}, "
+                       f"llm={result.get('llm_redlines', 0)}")
 
-    return FileResponse(
-        path=str(output_path),
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=f"{job['filename'].replace('.docx', '')}_{filename_suffix}.docx"
-    )
+        if job['status'] != JobStatus.COMPLETE:
+            logger.error(f"Job {job_id} not complete. Status: {job.get('status')}, "
+                        f"Error: {job.get('error', 'N/A')}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job not complete. Status: {job['status']}"
+            )
+
+        if final:
+            # Export with only accepted changes
+            logger.info(f"Exporting final document for job {job_id}")
+            output_path = await job_queue.export_final_document(job_id)
+            filename_suffix = "final"
+        else:
+            # Original redlined document with all changes
+            if not job.get('result') or 'output_path' not in job['result']:
+                logger.error(f"Job {job_id} missing result or output_path. Result keys: {list(job.get('result', {}).keys())}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Job result missing output path"
+                )
+
+            output_path = Path(job['result']['output_path'])
+            filename_suffix = "redlined"
+
+        logger.info(f"Output path for job {job_id}: {output_path}, exists={output_path.exists() if output_path else False}")
+
+        if not output_path or not output_path.exists():
+            logger.error(f"Output file not found for job {job_id}: {output_path}")
+            raise HTTPException(status_code=404, detail="Output file not found")
+
+        logger.info(f"Serving file for job {job_id}: {output_path}")
+        return FileResponse(
+            path=str(output_path),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=f"{job['filename'].replace('.docx', '')}_{filename_suffix}.docx"
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions without wrapping
+        raise
+    except Exception as e:
+        logger.exception(f"Unexpected error in download endpoint for job {job_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing download: {str(e)}"
+        )
 
 
 @app.get("/api/stats")
