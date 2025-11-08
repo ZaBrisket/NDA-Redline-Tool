@@ -163,7 +163,29 @@ class DocumentProcessor:
             }
 
             # Validate all redlines
+            initial_count = len(all_redlines)
             valid_redlines = RedlineValidator.validate_all(all_redlines, working_text)
+
+            # Safety check: If validation eliminated ALL redlines, use rule-based only as fallback
+            if initial_count > 0 and len(valid_redlines) == 0:
+                logging.getLogger(__name__).error(
+                    f"Job {job_id}: CRITICAL - Validation eliminated ALL {initial_count} redlines! "
+                    f"Falling back to rule-based redlines only."
+                )
+                # Try to salvage at least the rule-based redlines
+                valid_redlines = []
+                for redline in rule_redlines:
+                    if RedlineValidator.validate_redline(redline, working_text):
+                        valid_redlines.append(redline)
+
+                if len(valid_redlines) > 0:
+                    logging.getLogger(__name__).info(
+                        f"Job {job_id}: Recovered {len(valid_redlines)} valid rule-based redlines"
+                    )
+                else:
+                    logging.getLogger(__name__).error(
+                        f"Job {job_id}: Even rule-based redlines failed validation! Check document format."
+                    )
 
             print(f"Job {job_id}: {len(valid_redlines)} valid redlines after validation")
 

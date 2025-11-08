@@ -331,18 +331,30 @@ class RedlineValidator:
         """Check if a redline is valid"""
         required_fields = ['start', 'end', 'original_text']
 
-        for field in required_fields:
-            if field not in redline:
-                return False
+        # Check for missing required fields
+        missing_fields = [f for f in required_fields if f not in redline]
+        if missing_fields:
+            clause_type = redline.get('clause_type', 'unknown')
+            source = redline.get('source', 'unknown')
+            print(f"Invalid redline from {source} ({clause_type}): missing fields {missing_fields}")
+            print(f"  Redline keys present: {list(redline.keys())}")
+            # Log the actual content for debugging
+            if 'clause' in redline:
+                print(f"  Clause text: {redline.get('clause', '')[:100]}...")
+            if 'issue' in redline:
+                print(f"  Issue: {redline.get('issue', '')[:100]}...")
+            return False
 
         start = redline['start']
         end = redline['end']
 
         # Check bounds
         if start < 0 or end > len(working_text):
+            print(f"Redline out of bounds: start={start}, end={end}, text_length={len(working_text)}")
             return False
 
         if start >= end:
+            print(f"Invalid redline range: start={start} >= end={end}")
             return False
 
         # Verify original text matches
@@ -358,7 +370,9 @@ class RedlineValidator:
             from difflib import SequenceMatcher
             ratio = SequenceMatcher(None, actual_norm, expected_norm).ratio()
             if ratio < 0.8:
-                print(f"Text mismatch: expected '{expected_text}' but found '{actual_text}'")
+                print(f"Text mismatch (ratio={ratio:.2f}):")
+                print(f"  Expected: '{expected_text[:100]}...'")
+                print(f"  Found: '{actual_text[:100]}...'")
                 return False
 
         return True
@@ -367,11 +381,23 @@ class RedlineValidator:
     def validate_all(redlines: List[Dict], working_text: str) -> List[Dict]:
         """Filter to only valid redlines"""
         valid = []
+        invalid_count = 0
 
-        for redline in redlines:
+        print(f"Validating {len(redlines)} redlines...")
+
+        for idx, redline in enumerate(redlines):
             if RedlineValidator.validate_redline(redline, working_text):
                 valid.append(redline)
             else:
-                print(f"Invalid redline skipped: {redline.get('clause_type', 'unknown')}")
+                invalid_count += 1
+                clause_type = redline.get('clause_type', 'unknown')
+                source = redline.get('source', 'unknown')
+                print(f"Invalid redline #{idx+1} skipped: {clause_type} from {source}")
 
+        if invalid_count > 0:
+            print(f"WARNING: {invalid_count}/{len(redlines)} redlines were invalid and skipped")
+            if invalid_count == len(redlines):
+                print("CRITICAL: ALL redlines were invalid! Check format conversion.")
+
+        print(f"Validation complete: {len(valid)} valid redlines out of {len(redlines)} total")
         return valid

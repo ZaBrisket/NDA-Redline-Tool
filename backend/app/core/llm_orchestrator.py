@@ -237,6 +237,19 @@ class AnthropicExclusiveOrchestrator:
                 document_id=document_id
             )
 
+            # Safety check: If validation returned empty but Opus had results, preserve them
+            if not validated_result and opus_result.get('redlines'):
+                logger.warning("Validation returned empty, preserving Opus results")
+                validated_result = opus_result.get('redlines', [])
+
+            # Convert Claude format to document format with text positions
+            if validated_result:
+                validated_result = self._convert_claude_to_document_format(
+                    validated_result,
+                    document_text
+                )
+                logger.info(f"After format conversion: {len(validated_result)} redlines with positions")
+
             # Calculate final metrics
             processing_time = time.time() - start_time
             self.stats['processing_times'].append(processing_time)
@@ -442,7 +455,7 @@ class AnthropicExclusiveOrchestrator:
         Validate Opus findings with Claude Sonnet
         More lenient error handling as validation is supplementary
         """
-        model = "claude-3-5-sonnet-20241022"
+        model = "claude-3-5-sonnet-20241020"  # Correct model name (October 20, not 22)
 
         try:
             if PROMETHEUS_AVAILABLE:
@@ -503,12 +516,17 @@ class AnthropicExclusiveOrchestrator:
         except Exception as e:
             # Validation failures are non-fatal - return Opus results
             logger.warning(
-                "Claude Sonnet validation failed, using Opus results only",
+                "Claude Sonnet validation failed, preserving Opus results",
                 error=str(e),
                 error_type=type(e).__name__
             )
             claude_requests.labels(model="sonnet", status="error").inc()
-            return opus_result.get('redlines', [])
+
+            # CRITICAL: Return original redlines, not empty list
+            original_redlines = opus_result.get('redlines', [])
+            if original_redlines:
+                logger.info(f"Preserving {len(original_redlines)} Opus redlines after validation failure")
+            return original_redlines
 
     async def _handle_api_error(self, error: APIStatusError, model: str, attempt: int):
         """Handle API status errors with appropriate backoff strategies"""
@@ -874,6 +892,84 @@ Respond with a JSON object containing:
             final_redlines.append(redline)
 
         return final_redlines
+
+    def _convert_claude_to_document_format(self, claude_redlines: List[Dict], document_text: str) -> List[Dict]:
+        """
+        Convert Claude's conceptual redlines to document position format.
+        Maps high-level redlines to specific text positions.
+        """
+        converted = []
+
+        for redline in claude_redlines:
+            # First check if it already has the required format
+            if all(key in redline for key in ['start', 'end', 'original_text']):
+                # Already in correct format, just pass through
+                converted.append(redline)
+                continue
+
+            # Try to map Claude's format to document positions
+            clause_text = redline.get('clause', '')
+            issue = redline.get('issue', '')
+            recommendation = redline.get('recommendation', '')
+
+            # Try to find the clause in the document
+            if clause_text:
+                # Clean up clause text for searching
+                search_text = clause_text.strip()
+
+                # Try exact match first
+                position = document_text.find(search_text)
+
+                # If not found, try case-insensitive search
+                if position == -1:
+                    position = document_text.lower().find(search_text.lower())
+
+                # If still not found, try to find key phrases from the clause
+                if position == -1 and len(search_text) > 20:
+                    # Try first 50 characters as a fallback
+                    partial_search = search_text[:50]
+                    position = document_text.find(partial_search)
+
+                if position >= 0:
+                    # Found the text, create proper redline structure
+                    actual_text = document_text[position:position + len(search_text)]
+
+                    converted.append({
+                        'start': position,
+                        'end': position + len(search_text),
+                        'original_text': actual_text,
+                        'revised_text': recommendation or '',
+                        'severity': redline.get('severity', 'moderate'),
+                        'explanation': issue or redline.get('explanation', ''),
+                        'clause_type': redline.get('clause_type', 'llm_identified'),
+                        'source': 'claude',
+                        'confidence': redline.get('confidence', 85)
+                    })
+                else:
+                    # Could not find position, log warning
+                    logger.warning(
+                        f"Could not locate clause text in document: {clause_text[:100]}...",
+                        redline_keys=list(redline.keys())
+                    )
+            else:
+                # No clause text to search for
+                logger.warning(
+                    "Claude redline missing searchable text",
+                    redline_keys=list(redline.keys()),
+                    has_issue=bool(issue),
+                    has_recommendation=bool(recommendation)
+                )
+
+        if converted:
+            logger.info(
+                f"Converted {len(converted)}/{len(claude_redlines)} Claude redlines to document format"
+            )
+        else:
+            logger.warning(
+                f"Failed to convert any of {len(claude_redlines)} Claude redlines to document format"
+            )
+
+        return converted
 
     def _get_stats_snapshot(self) -> Dict:
         """Get current statistics snapshot"""
