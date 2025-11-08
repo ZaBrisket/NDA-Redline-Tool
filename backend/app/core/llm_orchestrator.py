@@ -55,7 +55,7 @@ except ImportError:
 try:
     structlog.configure(
         processors=[
-            structlog.contextvars.bind_contextvars,
+            structlog.contextvars.bind_contextvars(),
             structlog.stdlib.filter_by_level,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
