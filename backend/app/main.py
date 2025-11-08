@@ -10,7 +10,6 @@ import uuid
 import asyncio
 import json
 import os
-import logging
 from typing import Optional
 
 from .models.schemas import (
@@ -22,17 +21,13 @@ from .models.schemas import (
 )
 from .workers.document_worker import job_queue
 
-# Configure logging FIRST before any code that uses logger
-# Normalize LOG_LEVEL to uppercase to handle case-insensitive env vars (e.g., "Info" -> "INFO")
+# Setup Railway-optimized logging FIRST
+from .core.logger import setup_railway_logging, get_logger
+
+# Configure logging with proper stream routing for Railway
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+setup_railway_logging(log_level)
+logger = get_logger(__name__)
 
 # Import V2 API router
 try:
@@ -43,90 +38,100 @@ except ImportError as e:
     V2_AVAILABLE = False
 
 
+# Import worker state management
+from .core.state import worker_state
+
 # Modern FastAPI lifespan context manager (replaces deprecated on_event)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Handle startup and shutdown events using modern lifespan pattern"""
+    """
+    Handle startup and shutdown events using modern lifespan pattern
+    Optimized for Gunicorn multi-worker deployments
+    """
+    worker_id = os.getpid()
+
     # Startup
-    logger.info("=== Application Startup ===")
-    logger.info("Starting NDA Automated Redlining API...")
+    logger.info(
+        "=== Worker Startup ===",
+        extra={"extra_fields": {"worker_pid": worker_id}}
+    )
+    logger.info("Starting NDA Automated Redlining API worker")
 
-    # Log environment info
-    logger.info(f"PORT: {os.getenv('PORT', '8000')}")
-    logger.info(f"RAILWAY_ENVIRONMENT: {os.getenv('RAILWAY_ENVIRONMENT_NAME', 'development')}")
+    # Log environment info (once per worker)
+    logger.info(
+        "Worker environment",
+        extra={"extra_fields": {
+            "worker_pid": worker_id,
+            "port": os.getenv('PORT', '8000'),
+            "railway_env": os.getenv('RAILWAY_ENVIRONMENT_NAME', 'development'),
+            "log_level": os.getenv('LOG_LEVEL', 'INFO')
+        }}
+    )
 
-    # Validate required environment variables (All-Claude architecture)
+    # Initialize worker state with orchestrator
     api_key = os.getenv("ANTHROPIC_API_KEY")
+    initialization_success = await worker_state.initialize(api_key)
 
-    # Check if API key is present
-    if not api_key:
-        error_msg = (
-            "ANTHROPIC_API_KEY environment variable not set. "
-            "Check Railway dashboard Variables tab and ensure changes are deployed."
+    if initialization_success:
+        # Store reference in app.state for backward compatibility
+        app.state.orchestrator = worker_state.orchestrator
+        logger.info(
+            "Worker orchestrator initialized successfully",
+            extra={"extra_fields": {"worker_pid": worker_id}}
         )
-        logger.error(error_msg)
-        logger.warning("Service will start in degraded mode - API calls will fail until key is configured")
-        # Don't raise - allow service to start for health checks
-        app.state.orchestrator = None
     else:
-        # Check for placeholder keys
-        if api_key.startswith("sk-ant-your-") or api_key.startswith("sk-ant-api03-YOUR") or api_key == "your-api-key-here":
-            logger.error("ANTHROPIC_API_KEY contains placeholder value")
-            logger.warning("Service will start in degraded mode - configure real API key in Railway dashboard")
-            app.state.orchestrator = None
-        else:
-            # API key looks valid - initialize orchestrator
-            logger.info("Anthropic API key present: yes")
+        # Degraded mode - service starts but API calls will fail
+        app.state.orchestrator = None
+        logger.warning(
+            "Worker starting in degraded mode - ANTHROPIC_API_KEY not configured",
+            extra={"extra_fields": {"worker_pid": worker_id}}
+        )
 
-            try:
-                # Initialize All-Claude orchestrator with explicit API key
-                from .core.llm_orchestrator import AllClaudeLLMOrchestrator
+    # Log configuration (once per worker)
+    logger.info(
+        "Worker configuration",
+        extra={"extra_fields": {
+            "worker_pid": worker_id,
+            "max_file_size_mb": int(os.getenv('MAX_FILE_SIZE_MB', 50)),
+            "retention_days": os.getenv('RETENTION_DAYS', 7),
+            "validation_rate": os.getenv('VALIDATION_RATE', '0.15'),
+            "confidence_threshold": os.getenv('CONFIDENCE_THRESHOLD', '95'),
+            "orchestrator_ready": initialization_success
+        }}
+    )
 
-                app.state.orchestrator = AllClaudeLLMOrchestrator(api_key=api_key)
-                logger.info("✅ Orchestrator initialized successfully")
-                logger.info("✅ Anthropic client ready")
-
-            except ValueError as e:
-                logger.error(f"❌ Invalid API key format: {e}")
-                logger.warning("Service will start in degraded mode")
-                app.state.orchestrator = None
-
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize orchestrator: {e}", exc_info=True)
-                logger.warning("Service will start in degraded mode")
-                app.state.orchestrator = None
-
-    # Log configuration
-    logger.info(f"Configuration:")
-    logger.info(f"  - Max file size: {int(os.getenv('MAX_FILE_SIZE_MB', 50))}MB")
-    logger.info(f"  - Retention days: {os.getenv('RETENTION_DAYS', 7)}")
-    logger.info(f"  - Validation rate: {os.getenv('VALIDATION_RATE', '0.15')}")
-    logger.info(f"  - Confidence threshold: {os.getenv('CONFIDENCE_THRESHOLD', '95')}")
-    logger.info(f"  - Orchestrator status: {'initialized' if app.state.orchestrator else 'not initialized (degraded mode)'}")
-
-    logger.info("API startup complete ✓")
+    logger.info(
+        "Worker startup complete",
+        extra={"extra_fields": {"worker_pid": worker_id}}
+    )
 
     yield  # Application runs here
 
     # Shutdown
-    logger.info("=== Application Shutdown ===")
-    logger.info("Shutting down NDA Automated Redlining API...")
+    logger.info(
+        "=== Worker Shutdown ===",
+        extra={"extra_fields": {"worker_pid": worker_id}}
+    )
 
-    # Cleanup orchestrator if initialized
-    if hasattr(app.state, 'orchestrator') and app.state.orchestrator:
-        try:
-            if hasattr(app.state.orchestrator, 'client') and hasattr(app.state.orchestrator.client, 'close'):
-                await app.state.orchestrator.client.close()
-                logger.info("Anthropic client closed")
-        except Exception as e:
-            logger.error(f"Error closing Anthropic client: {e}")
+    # Get worker stats before cleanup
+    worker_stats = worker_state.get_stats()
+    logger.info(
+        "Worker statistics",
+        extra={"extra_fields": worker_stats}
+    )
 
-    # Cleanup any pending jobs
+    # Cleanup worker state
+    await worker_state.cleanup()
+
+    # Cleanup any pending jobs (only if this worker owns them)
     try:
         from .models.schemas import JobStatus
         pending_jobs = [job for job in job_queue.jobs.values() if job.get('status') == JobStatus.QUEUED]
         if pending_jobs:
-            logger.warning(f"Cancelling {len(pending_jobs)} pending jobs on shutdown")
+            logger.warning(
+                f"Cancelling {len(pending_jobs)} pending jobs on shutdown",
+                extra={"extra_fields": {"worker_pid": worker_id}}
+            )
             for job in pending_jobs:
                 job['status'] = JobStatus.ERROR
                 job['error_message'] = "Server shutdown before processing"
@@ -134,7 +139,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error during shutdown cleanup: {e}")
 
-    logger.info("Shutdown complete")
+    logger.info(
+        "Worker shutdown complete",
+        extra={"extra_fields": {"worker_pid": worker_id}}
+    )
 
 
 # Create FastAPI app with modern lifespan
@@ -233,25 +241,38 @@ async def health_check(request: Request):
     Returns 200 if service is running (even in degraded mode).
     This allows Railway health checks to pass while still indicating configuration status.
 
+    Note: Each Gunicorn worker has its own worker_state instance. This endpoint
+    reports the state of whichever worker handles this specific request.
+
     Checks:
     - Service is running
-    - Orchestrator initialization status
+    - Worker state and orchestrator initialization (this worker only)
     - API key configuration status
     """
     from datetime import datetime
+
+    worker_pid = os.getpid()
 
     health_data = {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",
         "architecture": "all-claude",
+        "worker_pid": worker_pid,
         "checks": {
             "service_running": True
         }
     }
 
-    # Check orchestrator initialization
-    if hasattr(request.app.state, "orchestrator"):
+    # Check this worker's state
+    # Note: This only reflects the state of the worker handling this request,
+    # not all workers in the deployment
+    if worker_state.initialized:
+        health_data["checks"]["orchestrator"] = "initialized"
+        health_data["checks"]["api_key"] = "configured"
+        health_data["this_worker_stats"] = worker_state.get_stats()
+    elif hasattr(request.app.state, "orchestrator"):
+        # Fallback to legacy check for compatibility
         if request.app.state.orchestrator is not None:
             health_data["checks"]["orchestrator"] = "initialized"
             health_data["checks"]["api_key"] = "configured"

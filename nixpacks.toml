@@ -8,9 +8,10 @@ nixPkgs = ["...", "python311", "gcc", "gcc-unwrapped", "zlib"]
 cmds = ["cd backend && python -m venv /opt/venv && . /opt/venv/bin/activate && pip install --timeout 60 -r requirements.txt"]
 
 [start]
-# Start with Gunicorn for production (Railway's startCommand will override this)
-cmd = "cd backend && /opt/venv/bin/gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120 --graceful-timeout 30 --keep-alive 5"
+# Start with Gunicorn using configuration file (Railway's startCommand will override this)
+cmd = "cd backend && /opt/venv/bin/gunicorn app.main:app -c gunicorn.conf.py"
 
 [variables]
 # Environment variables baked into build
 PYTHONUNBUFFERED = "1"
+LOG_FORMAT = "json"
