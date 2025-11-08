@@ -192,11 +192,14 @@ raw_env = [
     f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO')}"
 ]
 
-# SSL/TLS (not needed for Railway - they handle this at the edge)
+# SSL/TLS Configuration
+# Railway handles SSL/TLS termination at the edge (load balancer level)
+# so these settings are not needed for Railway deployments.
+# We only keep the minimal required SSL settings that accept None values.
 keyfile = None
 certfile = None
-ssl_version = None
-cert_reqs = None
+# Removed ssl_version - deprecated parameter that causes warnings
+# Removed cert_reqs - must be an integer (ssl.CERT_NONE/OPTIONAL/REQUIRED), not None
 ca_certs = None
 suppress_ragged_eofs = True
 do_handshake_on_connect = False
