@@ -107,12 +107,41 @@ class DocumentProcessor:
             #   - Validate ALL suggestions with Claude Sonnet (100%)
             #   - Merge with rule_redlines automatically
             logging.getLogger(__name__).info(f"Job {job_id}: Starting All-Claude analysis (Opus + Sonnet 100% validation)...")
-            all_redlines = await self.llm_orchestrator.analyze(working_text, rule_redlines)
-            logging.getLogger(__name__).info(f"Job {job_id}: All-Claude analysis complete - {len(all_redlines)} total redlines")
 
-            # Get LLM stats for reporting
-            llm_stats = self.llm_orchestrator.get_stats()
-            llm_redlines_count = llm_stats.get('validated_redlines', 0)
+            llm_error_occurred = False
+            try:
+                all_redlines = await self.llm_orchestrator.analyze(working_text, rule_redlines)
+
+                # Defensive check: ensure all_redlines is a list
+                if not isinstance(all_redlines, list):
+                    logging.getLogger(__name__).warning(
+                        f"Job {job_id}: LLM orchestrator returned non-list result, treating as empty"
+                    )
+                    all_redlines = []
+
+                logging.getLogger(__name__).info(
+                    f"Job {job_id}: All-Claude analysis complete - {len(all_redlines)} total redlines"
+                )
+
+            except Exception as llm_error:
+                # Log the error but don't fail the entire job
+                # Instead, continue with just the rule-based redlines
+                llm_error_occurred = True
+                logging.getLogger(__name__).error(
+                    f"Job {job_id}: LLM analysis failed - {type(llm_error).__name__}: {str(llm_error)}"
+                )
+                logging.getLogger(__name__).warning(
+                    f"Job {job_id}: Continuing with rule-based redlines only ({len(rule_redlines)} found)"
+                )
+                all_redlines = rule_redlines  # Fall back to just rule redlines
+
+            # Get LLM stats for reporting (if LLM ran successfully)
+            if not llm_error_occurred:
+                llm_stats = self.llm_orchestrator.get_stats()
+                llm_redlines_count = llm_stats.get('validated_redlines', 0)
+            else:
+                llm_stats = {'error': 'LLM analysis failed'}
+                llm_redlines_count = 0
 
             print(f"Job {job_id}: All-Claude analysis complete:")
             print(f"  - Rule-based: {len(rule_redlines)}")

@@ -5,10 +5,10 @@ Production-grade NDA review system that applies Microsoft Word track changes bas
 ## 🎯 Key Features
 
 - **Real Word Track Changes**: Generates actual `w:del` and `w:ins` XML elements compatible with Microsoft Word
-- **Hybrid Approach**: Deterministic rules + GPT-5 analysis + Claude validation
+- **All-Claude Architecture**: Deterministic rules + Claude Opus analysis + Claude Sonnet 100% validation
 - **95%+ Accuracy**: Tested against training corpus of 27 Edgewater-redlined NDAs
-- **Production Ready**: FastAPI backend with async job processing
-- **Cost Efficient**: <$0.11 per document with prompt caching
+- **Production Ready**: FastAPI backend with async job processing and comprehensive error handling
+- **Cost Efficient**: Optimized with Claude Opus for recall and Sonnet for validation
 
 ## 📊 System Analysis Results
 
@@ -33,7 +33,7 @@ NDA Reviewer/
 │   │   │   ├── text_indexer.py        # Normalized text ↔ DOCX mapping
 │   │   │   ├── docx_engine.py         # OXML track changes generator
 │   │   │   ├── rule_engine.py         # Deterministic pattern matching
-│   │   │   └── llm_orchestrator.py    # GPT-5 + Claude validation
+│   │   │   └── llm_orchestrator.py    # Claude Opus + Sonnet validation
 │   │   ├── workers/
 │   │   │   └── document_worker.py     # Async job processor
 │   │   ├── models/
@@ -55,8 +55,7 @@ NDA Reviewer/
 ### Prerequisites
 
 - Python 3.10+
-- OpenAI API key (for GPT-5)
-- Anthropic API key (for Claude validation)
+- Anthropic API key (for Claude Opus and Sonnet models)
 
 ### Installation
 
@@ -79,11 +78,19 @@ cp .env.template .env
 
 Required environment variables:
 ```env
-OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
-USE_PROMPT_CACHING=true
-VALIDATION_RATE=0.15
-CONFIDENCE_THRESHOLD=95
+LOG_LEVEL=INFO
+MAX_FILE_SIZE_MB=50
+RETENTION_DAYS=7
+```
+
+Optional environment variables:
+```env
+# Deprecated - no longer used (All-Claude architecture)
+# OPENAI_API_KEY=sk-...
+# USE_PROMPT_CACHING=true
+# VALIDATION_RATE=0.15
+# CONFIDENCE_THRESHOLD=95
 ```
 
 4. **Run the backend**:
@@ -183,11 +190,10 @@ Before deploying to Railway:
 
 1. **Environment Variables** - Set in Railway dashboard:
    ```
-   OPENAI_API_KEY=sk-...
    ANTHROPIC_API_KEY=sk-ant-...
-   USE_PROMPT_CACHING=true
-   VALIDATION_RATE=0.15
-   CONFIDENCE_THRESHOLD=95
+   LOG_LEVEL=INFO
+   MAX_FILE_SIZE_MB=50
+   RETENTION_DAYS=7
    ```
 
 2. **Configuration Files** - Ensure these exist in repository root:
