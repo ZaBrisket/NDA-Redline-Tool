@@ -587,8 +587,8 @@ Focus on:
 Return violations in strict JSON format."""
 
         try:
-            # Get model from environment - using Claude Opus
-            model = os.getenv("GPT_MODEL", "claude-3-opus-20240229")
+            # Get model from environment - using Claude Opus 4.1
+            model = os.getenv("GPT_MODEL", "claude-opus-4-1-20250805")
             max_tokens = int(os.getenv("GPT_MAX_TOKENS", "2000"))
 
             response = await self.openai_client.chat.completions.create(
@@ -653,8 +653,8 @@ Is this a valid issue? Options:
 Provide verdict and detailed rationale."""
 
         try:
-            # Get model from environment
-            model = os.getenv("SONNET_MODEL", "claude-3-5-sonnet-20241022")
+            # Get model from environment - using Claude Sonnet 4.5
+            model = os.getenv("SONNET_MODEL", "claude-sonnet-4-5-20250929")
             max_tokens = int(os.getenv("SONNET_MAX_TOKENS", "1500"))
 
             response = await self.anthropic_client.messages.create(
@@ -757,8 +757,8 @@ Full context:
 Provide definitive ruling for each violation with detailed legal reasoning."""
 
         try:
-            # Get model from environment
-            model = os.getenv("OPUS_MODEL", "claude-3-opus-20240229")
+            # Get model from environment - using Claude Opus 4.1
+            model = os.getenv("OPUS_MODEL", "claude-opus-4-1-20250805")
             max_tokens = int(os.getenv("OPUS_MAX_TOKENS", "2000"))
 
             response = await self.anthropic_client.messages.create(

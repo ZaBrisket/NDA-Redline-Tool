@@ -124,9 +124,9 @@ class TestAnthropicMigration:
         orchestrator_file = backend_path / "app" / "core" / "llm_orchestrator.py"
         content = orchestrator_file.read_text()
 
-        # Check for Claude model references
-        assert "claude-3-opus" in content, "Claude Opus model not found"
-        assert "claude-3-5-sonnet" in content or "claude-3.5-sonnet" in content, "Claude Sonnet model not found"
+        # Check for Claude model references (updated to Claude 4.x models)
+        assert "claude-opus-4" in content, "Claude Opus 4.x model not found"
+        assert "claude-sonnet-4" in content, "Claude Sonnet 4.x model not found"
 
     def test_error_handling_components(self, backend_path):
         """Verify comprehensive error handling is implemented"""

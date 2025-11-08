@@ -178,8 +178,8 @@ Expected response:
   "status": "healthy",
   "models_configured": {
     "gpt": "gpt-5",
-    "sonnet": "claude-3-5-sonnet-20241022",
-    "opus": "claude-3-opus-20240229"
+    "sonnet": "claude-sonnet-4-5-20250929",
+    "opus": "claude-opus-4-1-20250805"
   }
 }
 ```

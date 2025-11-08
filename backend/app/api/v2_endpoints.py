@@ -276,9 +276,9 @@ async def health_check_v2():
                 "pass_4": os.getenv("ENABLE_PASS_4", "true").lower() == "true"
             },
             "models_configured": {
-                "gpt": os.getenv("GPT_MODEL", "claude-3-opus-20240229"),
-                "sonnet": os.getenv("SONNET_MODEL", "claude-3-5-sonnet-20241022"),
-                "opus": os.getenv("OPUS_MODEL", "claude-3-opus-20240229")
+                "gpt": os.getenv("GPT_MODEL", "claude-opus-4-1-20250805"),
+                "sonnet": os.getenv("SONNET_MODEL", "claude-sonnet-4-5-20250929"),
+                "opus": os.getenv("OPUS_MODEL", "claude-opus-4-1-20250805")
             }
         }
 

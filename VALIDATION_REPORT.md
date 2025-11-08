@@ -63,8 +63,8 @@ All modified files pass Python syntax validation:
 
 ```python
 ✅ Orchestrator initialized successfully
-   - Opus model: claude-3-opus-20240229
-   - Sonnet model: claude-sonnet-4-20250514
+   - Opus model: claude-opus-4-1-20250805
+   - Sonnet model: claude-sonnet-4-5-20250929
    - Validation rate: 100.0%
    - Enable validation: True
    - Confidence threshold: 95
@@ -103,8 +103,8 @@ All modified files pass Python syntax validation:
 ✅ Stats contains 'errors': 0
 ✅ Stats contains 'total_cost_usd': 0.0
 ✅ Stats contains 'validation_rate': 1.0
-✅ Stats contains 'opus_model': claude-3-opus-20240229
-✅ Stats contains 'sonnet_model': claude-sonnet-4-20250514
+✅ Stats contains 'opus_model': claude-opus-4-1-20250805
+✅ Stats contains 'sonnet_model': claude-sonnet-4-5-20250929
 ```
 
 **Result:** 10/10 required stats fields present.

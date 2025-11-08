@@ -127,12 +127,12 @@ class RuleMatch(BaseModel):
 
 # Pass 1: Claude Opus Structured Output
 class GPT5Response(BaseModel):
-    """Structured response from Claude Opus (released August 2025)"""
+    """Structured response from Claude Opus 4.1 (released August 2025)"""
     violations: List[ViolationSchema]
     clause_type: ClauseType
     total_reviewed: int = Field(ge=0)
     processing_time_ms: int = Field(ge=0)
-    model_version: str = Field(default="claude-3-opus-20240229")  # Claude Opus default
+    model_version: str = Field(default="claude-opus-4-1-20250805")  # Claude Opus 4.1 default
 
     @model_validator(mode="after")
     def validate_violations(self):

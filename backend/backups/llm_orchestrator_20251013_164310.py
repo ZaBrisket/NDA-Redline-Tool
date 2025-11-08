@@ -1,4 +1,13 @@
 """
+⚠️  LEGACY BACKUP FILE - DO NOT USE IN PRODUCTION ⚠️
+This file contains DEPRECATED Claude model identifiers (claude-sonnet-4-20250514).
+Use the current version in backend/app/core/llm_orchestrator.py which references the latest models:
+- Claude Opus 4.1 (claude-opus-4-1-20250805)
+- Claude Sonnet 4.5 (claude-sonnet-4-5-20250929)
+
+This backup is kept for historical reference only.
+================================================================================
+
 LLM Orchestrator - GPT-5 analysis with Claude validation
 Handles non-deterministic pattern detection with cross-validation
 Integrated with semantic cache for 60% cost reduction

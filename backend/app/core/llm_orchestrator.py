@@ -165,16 +165,16 @@ class AnthropicExclusiveOrchestrator:
         elif settings and hasattr(settings, 'claude_opus_model'):
             self.opus_model = settings.claude_opus_model
         else:
-            # Use the current working model as fallback
-            self.opus_model = "claude-3-opus-20240229"
+            # Use the latest Claude Opus 4.1 model as fallback
+            self.opus_model = "claude-opus-4-1-20250805"
 
         if sonnet_model:
             self.sonnet_model = sonnet_model
         elif settings and hasattr(settings, 'claude_sonnet_model'):
             self.sonnet_model = settings.claude_sonnet_model
         else:
-            # Use the latest Sonnet model as fallback
-            self.sonnet_model = "claude-3-5-sonnet-20241022"  # Latest Sonnet model
+            # Use the latest Sonnet 4.5 model as fallback
+            self.sonnet_model = "claude-sonnet-4-5-20250929"  # Latest Sonnet 4.5 model
 
         # Circuit breaker configuration
         self.circuit_breaker_threshold = circuit_breaker_threshold
