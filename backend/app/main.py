@@ -241,29 +241,36 @@ async def health_check(request: Request):
     Returns 200 if service is running (even in degraded mode).
     This allows Railway health checks to pass while still indicating configuration status.
 
+    Note: Each Gunicorn worker has its own worker_state instance. This endpoint
+    reports the state of whichever worker handles this specific request.
+
     Checks:
     - Service is running
-    - Worker state and orchestrator initialization
+    - Worker state and orchestrator initialization (this worker only)
     - API key configuration status
     """
     from datetime import datetime
+
+    worker_pid = os.getpid()
 
     health_data = {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",
         "architecture": "all-claude",
-        "worker_pid": os.getpid(),
+        "worker_pid": worker_pid,
         "checks": {
             "service_running": True
         }
     }
 
-    # Check worker state
+    # Check this worker's state
+    # Note: This only reflects the state of the worker handling this request,
+    # not all workers in the deployment
     if worker_state.initialized:
         health_data["checks"]["orchestrator"] = "initialized"
         health_data["checks"]["api_key"] = "configured"
-        health_data["worker_stats"] = worker_state.get_stats()
+        health_data["this_worker_stats"] = worker_state.get_stats()
     elif hasattr(request.app.state, "orchestrator"):
         # Fallback to legacy check for compatibility
         if request.app.state.orchestrator is not None:

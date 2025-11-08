@@ -40,6 +40,7 @@ tmp_upload_dir = None
 
 # Logging configuration
 # Railway reads from stdout/stderr directly
+# Application-level logging is handled by setup_railway_logging() in app/core/logger.py
 accesslog = '-'  # stdout
 errorlog = '-'   # stderr
 loglevel = os.getenv('LOG_LEVEL', 'info').lower()
@@ -47,48 +48,8 @@ loglevel = os.getenv('LOG_LEVEL', 'info').lower()
 # Access log format with timing information
 access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)sµs'
 
-# Disable access log buffering for real-time Railway logs
-logconfig_dict = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'generic': {
-            'format': '%(asctime)s [%(process)d] [%(levelname)s] %(message)s',
-            'datefmt': '%Y-%m-%d %H:%M:%S',
-            'class': 'logging.Formatter'
-        }
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'generic',
-            'stream': sys.stdout
-        },
-        'error_console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'generic',
-            'stream': sys.stderr
-        }
-    },
-    'root': {
-        'level': loglevel.upper(),
-        'handlers': ['console']
-    },
-    'loggers': {
-        'gunicorn.error': {
-            'level': loglevel.upper(),
-            'handlers': ['error_console'],
-            'propagate': False,
-            'qualname': 'gunicorn.error'
-        },
-        'gunicorn.access': {
-            'level': 'INFO',
-            'handlers': ['console'],
-            'propagate': False,
-            'qualname': 'gunicorn.access'
-        }
-    }
-}
+# Note: We don't use logconfig_dict here to avoid conflicts with the application's
+# Railway-optimized logging configuration (app/core/logger.py)
 
 # Worker lifecycle hooks
 def on_starting(server):

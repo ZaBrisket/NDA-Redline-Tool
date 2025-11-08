@@ -5,6 +5,7 @@ Ensures efficient resource initialization and prevents redundant orchestrator cr
 
 import os
 import logging
+import asyncio
 from typing import Optional
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -33,12 +34,13 @@ class WorkerState:
         if self.worker_id is None:
             self.worker_id = os.getpid()
 
-    async def initialize(self, api_key: Optional[str] = None) -> bool:
+    async def initialize(self, api_key: Optional[str] = None, retry_count: int = 3) -> bool:
         """
-        Initialize worker-specific resources
+        Initialize worker-specific resources with retry logic
 
         Args:
             api_key: Anthropic API key (optional, will use env var if not provided)
+            retry_count: Number of retry attempts on transient failures
 
         Returns:
             True if initialization succeeded, False otherwise
@@ -50,69 +52,90 @@ class WorkerState:
             )
             return True
 
-        try:
-            logger.info(
-                f"Initializing worker {self.worker_id}",
-                extra={"worker_pid": self.worker_id}
-            )
+        # Get API key from parameter or environment
+        if api_key is None:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
 
-            # Import here to avoid circular dependencies
-            from .llm_orchestrator import AllClaudeLLMOrchestrator
-
-            # Get API key from parameter or environment
-            if api_key is None:
-                api_key = os.getenv("ANTHROPIC_API_KEY")
-
-            if not api_key:
-                logger.error(
-                    f"Worker {self.worker_id}: ANTHROPIC_API_KEY not configured",
-                    extra={"worker_pid": self.worker_id}
-                )
-                return False
-
-            # Check for placeholder keys
-            if api_key.startswith("sk-ant-your-") or api_key.startswith("sk-ant-api03-YOUR") or api_key == "your-api-key-here":
-                logger.error(
-                    f"Worker {self.worker_id}: ANTHROPIC_API_KEY contains placeholder value",
-                    extra={"worker_pid": self.worker_id}
-                )
-                return False
-
-            # Initialize orchestrator
-            self.orchestrator = AllClaudeLLMOrchestrator(api_key=api_key)
-            self.initialized = True
-            self.initialization_time = datetime.utcnow()
-
-            logger.info(
-                f"Worker {self.worker_id} initialized successfully",
-                extra={
-                    "worker_pid": self.worker_id,
-                    "initialization_time": self.initialization_time.isoformat()
-                }
-            )
-
-            return True
-
-        except ValueError as e:
+        if not api_key:
             logger.error(
-                f"Worker {self.worker_id}: Invalid API key format - {e}",
+                f"Worker {self.worker_id}: ANTHROPIC_API_KEY not configured",
                 extra={"worker_pid": self.worker_id}
             )
             return False
 
-        except Exception as e:
+        # Check for placeholder keys
+        if api_key.startswith("sk-ant-your-") or api_key.startswith("sk-ant-api03-YOUR") or api_key == "your-api-key-here":
             logger.error(
-                f"Worker {self.worker_id}: Initialization failed - {e}",
-                extra={"worker_pid": self.worker_id},
-                exc_info=True
+                f"Worker {self.worker_id}: ANTHROPIC_API_KEY contains placeholder value",
+                extra={"worker_pid": self.worker_id}
             )
             return False
+
+        # Retry loop for transient failures
+        for attempt in range(retry_count):
+            try:
+                logger.info(
+                    f"Initializing worker {self.worker_id} (attempt {attempt + 1}/{retry_count})",
+                    extra={"worker_pid": self.worker_id, "attempt": attempt + 1}
+                )
+
+                # Import here to avoid circular dependencies
+                from .llm_orchestrator import AllClaudeLLMOrchestrator
+
+                # Initialize orchestrator
+                self.orchestrator = AllClaudeLLMOrchestrator(api_key=api_key)
+                self.initialized = True
+                self.initialization_time = datetime.utcnow()
+
+                logger.info(
+                    f"Worker {self.worker_id} initialized successfully",
+                    extra={
+                        "worker_pid": self.worker_id,
+                        "initialization_time": self.initialization_time.isoformat(),
+                        "attempts": attempt + 1
+                    }
+                )
+
+                return True
+
+            except ValueError as e:
+                # API key format errors are not retryable
+                logger.error(
+                    f"Worker {self.worker_id}: Invalid API key format - {e}",
+                    extra={"worker_pid": self.worker_id}
+                )
+                return False
+
+            except Exception as e:
+                logger.error(
+                    f"Worker {self.worker_id}: Initialization failed (attempt {attempt + 1}/{retry_count}) - {e}",
+                    extra={"worker_pid": self.worker_id, "attempt": attempt + 1},
+                    exc_info=True
+                )
+
+                # Exponential backoff before retry
+                if attempt < retry_count - 1:
+                    backoff_seconds = 2 ** attempt
+                    logger.info(
+                        f"Worker {self.worker_id}: Retrying in {backoff_seconds}s",
+                        extra={"worker_pid": self.worker_id, "backoff_seconds": backoff_seconds}
+                    )
+                    await asyncio.sleep(backoff_seconds)
+                else:
+                    logger.error(
+                        f"Worker {self.worker_id}: Failed after {retry_count} attempts",
+                        extra={"worker_pid": self.worker_id}
+                    )
+                    return False
+
+        return False
 
     async def cleanup(self) -> None:
         """
         Cleanup worker resources on shutdown
 
-        Ensures proper cleanup of Anthropic client and other resources
+        Ensures proper cleanup of Anthropic AsyncAnthropic client and other resources
+        Uses aclose() for async client cleanup
         """
         if not self.initialized:
             return
@@ -127,14 +150,21 @@ class WorkerState:
                 }
             )
 
-            # Close Anthropic client if available
+            # Close Anthropic AsyncAnthropic client if available
+            # AsyncAnthropic uses aclose() not close()
             if self.orchestrator and hasattr(self.orchestrator, 'client'):
-                if hasattr(self.orchestrator.client, 'close'):
-                    await self.orchestrator.client.close()
-                    logger.info(
-                        f"Worker {self.worker_id}: Anthropic client closed",
-                        extra={"worker_pid": self.worker_id}
-                    )
+                if hasattr(self.orchestrator.client, 'aclose'):
+                    try:
+                        await self.orchestrator.client.aclose()
+                        logger.info(
+                            f"Worker {self.worker_id}: Anthropic client closed",
+                            extra={"worker_pid": self.worker_id}
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Worker {self.worker_id}: Error closing Anthropic client - {e}",
+                            extra={"worker_pid": self.worker_id}
+                        )
 
             # Clear references
             self.orchestrator = None
