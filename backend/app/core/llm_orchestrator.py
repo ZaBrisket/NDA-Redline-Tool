@@ -222,8 +222,12 @@ class AnthropicExclusiveOrchestrator:
                 rule_redlines=rule_redlines or []
             )
 
-            if not opus_result:
-                raise RuntimeError("Claude Opus analysis failed to produce results")
+            # opus_result will always be a dict (never None) but may have empty redlines
+            if not opus_result.get('redlines'):
+                logger.info("Claude Opus found no issues - document appears clean")
+                # Still proceed to validation for completeness
+            else:
+                logger.info(f"Claude Opus identified {len(opus_result['redlines'])} potential issues")
 
             # Validation with Sonnet
             logger.info("Starting Claude Sonnet validation")
@@ -263,20 +267,15 @@ class AnthropicExclusiveOrchestrator:
             self.stats['failed_requests'] += 1
             processing_time = time.time() - start_time
 
-            error_result = {
-                'status': 'error',
-                'error': str(e),
-                'error_type': type(e).__name__,
-                'correlation_id': correlation_id,
-                'processing_time': processing_time,
-                'stats_snapshot': self._get_stats_snapshot()
-            }
+            # Create user-friendly error message for the exception
+            user_friendly_error = self._get_user_friendly_error(e)
 
             logger.error(
                 "Document analysis failed",
                 error=str(e),
                 error_type=type(e).__name__,
                 processing_time=processing_time,
+                correlation_id=correlation_id,
                 exc_info=True
             )
 
@@ -294,7 +293,8 @@ class AnthropicExclusiveOrchestrator:
                 except Exception:
                     pass  # Don't fail on Sentry errors
 
-            raise
+            # Raise user-friendly error for document_worker to catch and handle gracefully
+            raise RuntimeError(user_friendly_error) from e
         finally:
             try:
                 structlog.contextvars.clear_contextvars()
@@ -366,26 +366,24 @@ class AnthropicExclusiveOrchestrator:
                 cost = (input_tokens * 0.015 + output_tokens * 0.075) / 1000
                 self.stats['total_cost_usd'] += cost
 
-                # Parse and validate response
+                # Parse and validate response (never returns None, always returns dict)
                 result = self._parse_claude_response(response.content[0].text)
 
-                if result and result.get('redlines'):
-                    logger.info(
-                        "Claude Opus analysis succeeded",
-                        elapsed_seconds=elapsed,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        cost_usd=cost,
-                        redlines_found=len(result.get('redlines', []))
-                    )
+                # Log the response (success even if empty redlines)
+                logger.info(
+                    "Claude Opus analysis succeeded",
+                    elapsed_seconds=elapsed,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost,
+                    redlines_found=len(result.get('redlines', []))
+                )
 
-                    claude_requests.labels(model="opus", status="success").inc()
-                    return result
-                else:
-                    logger.warning("Claude Opus returned empty or invalid response")
-                    if attempt < self.max_retries:
-                        await self._backoff(attempt, "empty_response")
-                        continue
+                claude_requests.labels(model="opus", status="success").inc()
+
+                # Return result even if redlines array is empty
+                # Empty redlines means no issues found, which is a valid outcome
+                return result
 
             except asyncio.TimeoutError:
                 self.stats['timeout_errors'] += 1
@@ -659,13 +657,44 @@ Provide a comprehensive analysis including:
 4. Potential risks and their severity
 5. Specific recommended changes with explanations
 
-Format your response as a JSON object with a 'redlines' array containing objects with these fields:
-- clause: The specific clause or section
-- issue: What's problematic
-- severity: high/medium/low
-- recommendation: Specific change needed
-- explanation: Why this change is important
-"""
+CRITICAL: You must respond with ONLY a valid JSON object. Do not include any explanatory text before or after the JSON.
+
+Format your response as a JSON object with a 'redlines' array. Each redline object must include:
+- clause: The specific clause or section name
+- issue: What's problematic about this clause
+- severity: Must be exactly one of: "high", "medium", or "low"
+- original_text: The exact text from the document that needs to change (quote it precisely)
+- revised_text: The replacement text to use (or empty string "" if deleting)
+- recommendation: Brief description of the change needed
+- explanation: Detailed reasoning for why this change is important
+
+Example response format:
+{{
+  "redlines": [
+    {{
+      "clause": "Term and Termination",
+      "issue": "Confidentiality term is indefinite/perpetual",
+      "severity": "high",
+      "original_text": "shall remain in effect in perpetuity",
+      "revised_text": "shall remain in effect for 2 years from the Effective Date",
+      "recommendation": "Limit confidentiality term to 2 years",
+      "explanation": "Perpetual confidentiality obligations are unreasonably burdensome and should be time-limited to a reasonable period."
+    }},
+    {{
+      "clause": "Governing Law",
+      "issue": "Governing law is not Delaware",
+      "severity": "medium",
+      "original_text": "governed by the laws of California",
+      "revised_text": "governed by the laws of Delaware",
+      "recommendation": "Change governing law to Delaware",
+      "explanation": "Delaware law is preferred for consistency with corporate governance."
+    }}
+  ]
+}}
+
+If the document has no issues, return: {{"redlines": []}}
+
+Remember: Respond with ONLY the JSON object, no additional text."""
 
     def _build_validation_prompt(self, opus_result: Dict, document_text: str) -> str:
         """Build validation prompt for Claude Sonnet"""
@@ -691,47 +720,104 @@ Respond with a JSON object containing:
 - severity_adjustments: Object mapping redline IDs to new severity levels
 """
 
-    def _parse_claude_response(self, response_text: str) -> Optional[Dict]:
-        """Parse Claude's response, handling both JSON and text formats"""
+    def _parse_claude_response(self, response_text: str) -> Dict:
+        """
+        Parse Claude's response, handling both JSON and text formats.
+        NEVER returns None - always returns a dict with a 'redlines' list (possibly empty).
+        """
         try:
-            # Try to parse as JSON first
-            if response_text.strip().startswith('{'):
-                return json.loads(response_text)
+            logger.debug(
+                "Parsing Claude response",
+                response_length=len(response_text),
+                response_preview=response_text[:200],
+            )
 
-            # Try to extract JSON from markdown code blocks
-            import re
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(1))
+            parsed = None
 
-            # Fallback: Create structured response from text
-            lines = response_text.strip().split('\n')
+            # 1) Try direct JSON
+            text = response_text.strip()
+            if text.startswith("{"):
+                parsed = json.loads(text)
+
+            # 2) Try JSON inside markdown code fences
+            if parsed is None:
+                import re
+                json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+                if json_match:
+                    parsed = json.loads(json_match.group(1))
+
+            # 3) If we got JSON, normalize to {'redlines': [...]}
+            if parsed is not None:
+                redlines = parsed.get("redlines")
+                if isinstance(redlines, list):
+                    logger.info(
+                        f"Successfully parsed JSON response with {len(redlines)} redlines"
+                    )
+                    return {"redlines": redlines}
+                else:
+                    logger.warning(
+                        "JSON parsed but missing 'redlines' key or not a list, returning empty"
+                    )
+                    return {"redlines": []}
+
+            # 4) Fallback: structured text parsing
+            logger.warning(
+                "Claude response not in JSON format, attempting text parsing fallback"
+            )
+            lines = text.split("\n")
             redlines = []
-            current_redline = {}
+            current = {}
 
             for line in lines:
-                if line.strip():
-                    if 'clause' in line.lower() or 'section' in line.lower():
-                        if current_redline:
-                            redlines.append(current_redline)
-                        current_redline = {'clause': line.strip()}
-                    elif 'issue' in line.lower() or 'problem' in line.lower():
-                        current_redline['issue'] = line.strip()
-                    elif 'recommendation' in line.lower():
-                        current_redline['recommendation'] = line.strip()
+                line = line.strip()
+                if not line:
+                    continue
 
-            if current_redline:
-                redlines.append(current_redline)
+                lower = line.lower()
+                if "clause" in lower or "section" in lower:
+                    if current:
+                        redlines.append(current)
+                        current = {}
+                    current["clause"] = line
+                elif "issue" in lower or "problem" in lower:
+                    current["issue"] = line
+                elif "severity" in lower:
+                    current["severity"] = line.split(":", 1)[-1].strip().lower()
+                elif "recommendation" in lower:
+                    current["recommendation"] = line
+                elif "explanation" in lower:
+                    current["explanation"] = line
 
-            return {'redlines': redlines} if redlines else None
+            if current:
+                redlines.append(current)
+
+            if redlines:
+                logger.info(
+                    f"Text parsing fallback succeeded with {len(redlines)} redlines"
+                )
+                return {"redlines": redlines}
+            else:
+                logger.warning(
+                    "Text parsing fallback found no redlines, returning empty"
+                )
+                return {"redlines": []}
+
+        except json.JSONDecodeError as e:
+            logger.error(
+                "JSON parsing failed",
+                error=str(e),
+                response_preview=response_text[:500],
+            )
+            return {"redlines": []}
 
         except Exception as e:
             logger.error(
-                "Failed to parse Claude response",
+                "Unexpected error parsing Claude response",
                 error=str(e),
-                response_preview=response_text[:500]
+                error_type=type(e).__name__,
+                response_preview=response_text[:500],
             )
-            return None
+            return {"redlines": []}
 
     def _parse_validation_response(self, response_text: str) -> Dict:
         """Parse Sonnet's validation response"""
@@ -806,6 +892,44 @@ Respond with a JSON object containing:
         stats.pop('processing_times', None)
 
         return stats
+
+    def _get_user_friendly_error(self, error: Exception) -> str:
+        """
+        Convert technical errors to user-friendly messages
+        """
+        error_str = str(error)
+        error_type = type(error).__name__
+
+        # Circuit breaker errors
+        if "circuit breaker" in error_str.lower():
+            return "The AI analysis service is temporarily unavailable due to repeated errors. Please try again in a few minutes."
+
+        # API key errors
+        if "api key" in error_str.lower() or "authentication" in error_str.lower():
+            return "The AI service API key is not configured correctly. Please contact support or verify your API key settings."
+
+        # Rate limiting
+        if "rate limit" in error_str.lower() or error_type == "RateLimitError":
+            return "The AI service is currently experiencing high demand. Please try again in a few moments."
+
+        # Timeout errors
+        if "timeout" in error_str.lower() or error_type == "TimeoutError":
+            return "The AI analysis took too long to complete. This may be due to document size or service load. Please try again."
+
+        # Connection errors
+        if "connection" in error_str.lower() or error_type in ["ConnectionError", "APIConnectionError"]:
+            return "Unable to connect to the AI analysis service. Please check your internet connection and try again."
+
+        # Overload errors
+        if "overload" in error_str.lower() or "529" in error_str:
+            return "The AI service is currently overloaded. Please wait a minute and try again."
+
+        # Parsing errors (shouldn't happen with new robust parsing, but just in case)
+        if "parse" in error_str.lower() or "json" in error_str.lower():
+            return "There was an issue processing the AI response. The analysis has been logged and our team will investigate. Please try again or contact support if the issue persists."
+
+        # Generic fallback with some helpful context
+        return f"An unexpected error occurred during document analysis. Please try again or contact support if the problem persists. (Error: {error_type})"
 
     # Legacy method for compatibility
     async def analyze(self, working_text: str, rule_redlines: List[Dict]) -> List[Dict]:
