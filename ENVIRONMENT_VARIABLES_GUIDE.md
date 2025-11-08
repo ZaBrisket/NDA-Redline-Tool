@@ -44,11 +44,11 @@ GPT_MODEL=gpt-5                         # Latest GPT model (GPT-5, released Augu
 GPT_TEMPERATURE=0.1                     # GPT temperature (0.0-1.0)
 GPT_MAX_TOKENS=2000                     # Max tokens for GPT
 
-SONNET_MODEL=claude-3-5-sonnet-20241022 # Sonnet model
+SONNET_MODEL=claude-sonnet-4-5-20250929 # Sonnet 4.5 model
 SONNET_TEMPERATURE=0.2                  # Sonnet temperature
 SONNET_MAX_TOKENS=1500                  # Max tokens for Sonnet
 
-OPUS_MODEL=claude-3-opus-20240229       # Opus model
+OPUS_MODEL=claude-opus-4-1-20250805     # Opus 4.1 model
 OPUS_TEMPERATURE=0.1                    # Opus temperature
 OPUS_MAX_TOKENS=2000                    # Max tokens for Opus
 OPUS_CONFIDENCE_THRESHOLD=85            # Route to Opus if confidence < this
@@ -167,8 +167,8 @@ vercel env add NEXT_PUBLIC_API_URL
 
 ### Model Configuration
 - [ ] `GPT_MODEL` - GPT model name (default: gpt-5, released August 2025)
-- [ ] `SONNET_MODEL` - Sonnet model (default: claude-3-5-sonnet-20241022)
-- [ ] `OPUS_MODEL` - Opus model (default: claude-3-opus-20240229)
+- [ ] `SONNET_MODEL` - Sonnet model (default: claude-sonnet-4-5-20250929)
+- [ ] `OPUS_MODEL` - Opus model (default: claude-opus-4-1-20250805)
 
 ### Security
 - [ ] `ENABLE_API_KEYS` - Require API keys (default: false)

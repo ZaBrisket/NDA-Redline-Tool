@@ -46,8 +46,8 @@ MAX_CONCURRENT_DOCUMENTS=3
 ```bash
 # Models (defaults work fine)
 GPT_MODEL=gpt-4o
-SONNET_MODEL=claude-3-5-sonnet-20241022
-OPUS_MODEL=claude-3-opus-20240229
+SONNET_MODEL=claude-sonnet-4-5-20250929
+OPUS_MODEL=claude-opus-4-1-20250805
 
 # Thresholds
 SKIP_GPT_CONFIDENCE_THRESHOLD=98

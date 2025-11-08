@@ -57,8 +57,8 @@ def validate_environment():
     # Model Configuration
     print("\nModel Configuration:")
     print(f"- GPT Model: {os.getenv('GPT_MODEL', 'gpt-5')}")
-    print(f"- Sonnet Model: {os.getenv('SONNET_MODEL', 'claude-3-5-sonnet-20241022')}")
-    print(f"- Opus Model: {os.getenv('OPUS_MODEL', 'claude-3-opus-20240229')}")
+    print(f"- Sonnet Model: {os.getenv('SONNET_MODEL', 'claude-sonnet-4-5-20250929')}")
+    print(f"- Opus Model: {os.getenv('OPUS_MODEL', 'claude-opus-4-1-20250805')}")
 
     # Performance settings
     print("\nPerformance Configuration:")

@@ -49,8 +49,8 @@ RATE_LIMIT_REQUESTS_PER_MINUTE=60
 
 # Model Configuration (optional - defaults work fine)
 GPT_MODEL=gpt-5                         # GPT-5 (released August 2025)
-SONNET_MODEL=claude-3-5-sonnet-20241022
-OPUS_MODEL=claude-3-opus-20240229
+SONNET_MODEL=claude-sonnet-4-5-20250929 # Claude Sonnet 4.5 (released September 2025)
+OPUS_MODEL=claude-opus-4-1-20250805     # Claude Opus 4.1 (released August 2025)
 ```
 
 6. Click "Save" or "Deploy"

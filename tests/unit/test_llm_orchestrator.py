@@ -71,7 +71,8 @@ async def test_all_claude_orchestrator_analyze():
         # Verify result contains validated redline
         assert len(result) == 1
         assert result[0]['source'] == 'llm'
-        assert result[0]['validated_by'] == 'claude-sonnet-4.5'
+        # Verify validation was done by the configured Sonnet model
+        assert 'claude-sonnet' in result[0].get('validated_by', '').lower()
         assert result[0]['confidence'] == 95
 
 

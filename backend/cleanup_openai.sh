@@ -54,13 +54,13 @@ else
     echo -e "${RED}Found GPT references in:${NC}"
     echo "$GPT_FILES"
 
-    # Replace GPT references
+    # Replace GPT references with latest Claude Opus model
     for file in $GPT_FILES; do
         echo "Updating $file..."
-        sed -i.bak 's/gpt-4[^ "'\'')]*/claude-3-opus-20240229/g' "$file"
-        sed -i.bak 's/gpt-5[^ "'\'')]*/claude-3-opus-20240229/g' "$file"
-        sed -i.bak 's/GPT-4/Claude Opus/g' "$file"
-        sed -i.bak 's/GPT-5/Claude Opus/g' "$file"
+        sed -i.bak 's/gpt-4[^ "'\'')]*/claude-opus-4-1-20250805/g' "$file"
+        sed -i.bak 's/gpt-5[^ "'\'')]*/claude-opus-4-1-20250805/g' "$file"
+        sed -i.bak 's/GPT-4/Claude Opus 4.1/g' "$file"
+        sed -i.bak 's/GPT-5/Claude Opus 4.1/g' "$file"
         rm -f "${file}.bak"
     done
 fi

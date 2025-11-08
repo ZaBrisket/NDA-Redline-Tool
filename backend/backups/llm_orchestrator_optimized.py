@@ -1,4 +1,13 @@
 """
+⚠️  LEGACY BACKUP FILE - DO NOT USE IN PRODUCTION ⚠️
+This file contains DEPRECATED Claude model identifiers (claude-3-opus-20240229, claude-3-5-sonnet-20241022).
+Use the current version in backend/app/core/llm_orchestrator.py which references the latest models:
+- Claude Opus 4.1 (claude-opus-4-1-20250805)
+- Claude Sonnet 4.5 (claude-sonnet-4-5-20250929)
+
+This backup is kept for historical reference only.
+================================================================================
+
 LLM Orchestrator - OPTIMIZED VERSION with Async Clients and Parallel Execution
 Performance improvements:
 - Async OpenAI and Anthropic clients

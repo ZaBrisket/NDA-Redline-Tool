@@ -265,8 +265,8 @@ class DocumentProcessor:
                     'architecture': 'ALL_CLAUDE',
                     'validation_rate': '100%',  # 100% validation with Sonnet
                     'models': {
-                        'recall': llm_stats.get('opus_model', 'claude-opus'),
-                        'validation': llm_stats.get('sonnet_model', 'claude-sonnet-4')
+                        'recall': llm_stats.get('opus_model', 'claude-opus-4-1-20250805'),
+                        'validation': llm_stats.get('sonnet_model', 'claude-sonnet-4-5-20250929')
                     }
                 },
                 # Quality metrics for monitoring
