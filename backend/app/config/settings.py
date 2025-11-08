@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     )
 
     claude_sonnet_model: str = Field(
-        default="claude-3-5-sonnet-20240620",
+        default="claude-3-5-sonnet-20241022",
         description="Claude Sonnet model identifier"
     )
 

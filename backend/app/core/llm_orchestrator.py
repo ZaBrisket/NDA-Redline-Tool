@@ -173,8 +173,8 @@ class AnthropicExclusiveOrchestrator:
         elif settings and hasattr(settings, 'claude_sonnet_model'):
             self.sonnet_model = settings.claude_sonnet_model
         else:
-            # Use the actually available Sonnet model
-            self.sonnet_model = "claude-3-5-sonnet-20240620"  # This is a known working model
+            # Use the latest Sonnet model as fallback
+            self.sonnet_model = "claude-3-5-sonnet-20241022"  # Latest Sonnet model
 
         # Circuit breaker configuration
         self.circuit_breaker_threshold = circuit_breaker_threshold
