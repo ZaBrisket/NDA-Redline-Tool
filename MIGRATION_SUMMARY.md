@@ -109,8 +109,8 @@ VALIDATION_RATE=0.15
 ANTHROPIC_API_KEY=sk-ant-your-anthropic-api-key-here
 
 # Claude Model Configuration
-CLAUDE_OPUS_MODEL=claude-3-opus-20240229
-CLAUDE_SONNET_MODEL=claude-sonnet-4-20250514
+CLAUDE_OPUS_MODEL=claude-opus-4-1-20250805
+CLAUDE_SONNET_MODEL=claude-sonnet-4-5-20250929
 
 # Processing Configuration
 VALIDATION_RATE=1.0  # 100% validation

@@ -17,8 +17,8 @@ async def test_all_claude_orchestrator_initialization():
         # Verify configuration
         assert orchestrator.validation_rate == 1.0, "Should validate 100% of suggestions"
         assert orchestrator.enable_validation == True
-        assert 'opus' in orchestrator.opus_model.lower() or 'claude-3' in orchestrator.opus_model
-        assert 'sonnet' in orchestrator.sonnet_model.lower() or 'claude' in orchestrator.sonnet_model
+        assert 'opus' in orchestrator.opus_model.lower() and 'claude' in orchestrator.opus_model.lower()
+        assert 'sonnet' in orchestrator.sonnet_model.lower() and 'claude' in orchestrator.sonnet_model.lower()
 
 
 @pytest.mark.asyncio

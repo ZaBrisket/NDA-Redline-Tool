@@ -21,13 +21,13 @@ class Settings(BaseSettings):
     )
 
     claude_opus_model: str = Field(
-        default="claude-3-opus-20240229",
-        description="Claude Opus model identifier"
+        default="claude-opus-4-1-20250805",
+        description="Claude Opus 4.1 model identifier"
     )
 
     claude_sonnet_model: str = Field(
-        default="claude-3-5-sonnet-20241022",
-        description="Claude Sonnet model identifier"
+        default="claude-sonnet-4-5-20250929",
+        description="Claude Sonnet 4.5 model identifier"
     )
 
     # PROCESSING CONFIGURATION
