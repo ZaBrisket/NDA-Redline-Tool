@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
             app.state.orchestrator = None
         else:
             # API key looks valid - initialize orchestrator
-            logger.info(f"API key found: {api_key[:10]}... (truncated)")
+            logger.info("Anthropic API key present: yes")
 
             try:
                 # Initialize All-Claude orchestrator with explicit API key
