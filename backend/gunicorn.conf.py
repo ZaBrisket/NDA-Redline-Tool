@@ -7,8 +7,34 @@ import multiprocessing
 import os
 import sys
 
+# Validate critical environment variables
+def validate_environment():
+    """Validate that required environment variables are present"""
+    critical_vars = []
+
+    # Check PORT (Railway should always provide this)
+    port = os.getenv('PORT', '8080')
+    if not port.isdigit():
+        raise ValueError(f"Invalid PORT value: {port}. Must be a number.")
+
+    # Log environment info for debugging
+    print(f"[Gunicorn Config] Starting with PORT={port}")
+    print(f"[Gunicorn Config] Workers: {os.getenv('WORKERS', 'auto')}")
+    print(f"[Gunicorn Config] Log Level: {os.getenv('LOG_LEVEL', 'info')}")
+    print(f"[Gunicorn Config] Python Path: {sys.executable}")
+    print(f"[Gunicorn Config] Working Directory: {os.getcwd()}")
+
+    return port
+
+# Validate environment on import
+try:
+    validated_port = validate_environment()
+except Exception as e:
+    print(f"[Gunicorn Config ERROR] Configuration validation failed: {e}", file=sys.stderr)
+    sys.exit(1)
+
 # Server socket
-bind = f"0.0.0.0:{os.getenv('PORT', '8080')}"
+bind = f"0.0.0.0:{validated_port}"
 
 # Worker configuration
 # Reduce from 4 to 2 workers to minimize redundant initialization
@@ -59,6 +85,23 @@ def on_starting(server):
     server.log.info(f"Configuration: {workers} workers, {worker_class} worker class")
     server.log.info(f"Binding to {bind}")
     server.log.info(f"Timeout: {timeout}s, Graceful timeout: {graceful_timeout}s")
+    server.log.info(f"Current working directory: {os.getcwd()}")
+    server.log.info(f"Python executable: {sys.executable}")
+    server.log.info(f"Python version: {sys.version}")
+
+    # Verify critical paths exist
+    app_path = os.path.join(os.getcwd(), 'app', 'main.py')
+    if os.path.exists(app_path):
+        server.log.info(f"✓ App module found at: {app_path}")
+    else:
+        server.log.warning(f"⚠ App module not found at expected path: {app_path}")
+
+    # Check for ANTHROPIC_API_KEY (don't log the value)
+    if os.getenv('ANTHROPIC_API_KEY'):
+        server.log.info("✓ ANTHROPIC_API_KEY is set")
+    else:
+        server.log.warning("⚠ ANTHROPIC_API_KEY is not set - AI features may not work")
+
     server.log.info("=" * 60)
 
 
@@ -136,7 +179,9 @@ reuse_port = True if sys.platform == 'linux' else False
 backlog = 2048
 
 # Chdir to specified directory before apps loading
-chdir = None
+# Removed chdir = None to fix Railway deployment error
+# When chdir is None, gunicorn's internal validation fails
+# Since Procfile already does 'cd backend', we don't need this
 
 # Detach the main Gunicorn process from the controlling terminal
 daemon = False
