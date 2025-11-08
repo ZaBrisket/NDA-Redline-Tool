@@ -2,7 +2,7 @@ rules:
   # TERM LIMITS - Critical
   - id: term_limit_perpetual
     type: confidentiality_term
-    pattern: '\b(?:perpetual|indefinite|no\s+expir(?:ation|y)|without\s+(?:time\s+)?limit)\b'
+    pattern: '\b(?:perpetual(?:ly|ity)?|indefinite(?:ly)?|no\s+expir(?:ation|y)|without\s+(?:time\s+)?limit)\b'
     severity: critical
     action: delete
     explanation: "Remove perpetual/indefinite confidentiality terms"

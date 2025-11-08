@@ -105,22 +105,33 @@ class DocumentProcessor:
             # The orchestrator will:
             #   - Use Claude Opus for comprehensive recall
             #   - Validate ALL suggestions with Claude Sonnet (100%)
-            #   - Merge with rule_redlines automatically
+            #   - Return LLM-only redlines (not merged with rules)
             logging.getLogger(__name__).info(f"Job {job_id}: Starting All-Claude analysis (Opus + Sonnet 100% validation)...")
 
             llm_error_occurred = False
             try:
-                all_redlines = await self.llm_orchestrator.analyze(working_text, rule_redlines)
+                llm_redlines = await self.llm_orchestrator.analyze(working_text, rule_redlines)
 
-                # Defensive check: ensure all_redlines is a list
-                if not isinstance(all_redlines, list):
+                # Defensive check: ensure llm_redlines is a list
+                if not isinstance(llm_redlines, list):
                     logging.getLogger(__name__).warning(
-                        f"Job {job_id}: LLM orchestrator returned {type(all_redlines).__name__}, treating as empty list"
+                        f"Job {job_id}: LLM orchestrator returned {type(llm_redlines).__name__}, treating as empty list"
                     )
-                    all_redlines = []
+                    llm_redlines = []
 
                 logging.getLogger(__name__).info(
-                    f"Job {job_id}: All-Claude analysis complete - {len(all_redlines)} total redlines"
+                    f"Job {job_id}: LLM analysis complete - {len(llm_redlines)} LLM-only redlines"
+                )
+
+                # Step 3: Merge LLM and rule-based redlines
+                all_redlines, merge_stats = self._compare_and_combine_redlines(
+                    llm_redlines, rule_redlines, working_text
+                )
+
+                logging.getLogger(__name__).info(
+                    f"Job {job_id}: Merged redlines - {len(all_redlines)} total "
+                    f"(LLM-only: {merge_stats['llm_only']}, Rule-only: {merge_stats['rule_only']}, "
+                    f"Both: {merge_stats['both_found']})"
                 )
 
             except Exception as llm_error:
@@ -134,16 +145,26 @@ class DocumentProcessor:
                     f"Job {job_id}: Continuing with rule-based redlines only ({len(rule_redlines)} found)"
                 )
                 all_redlines = rule_redlines  # Fall back to just rule redlines
+                llm_redlines = []  # No LLM redlines due to error
+                merge_stats = {
+                    'llm_only': 0,
+                    'rule_only': len(rule_redlines),
+                    'both_found': 0,
+                    'conflicts_resolved': 0
+                }
 
             # Get LLM stats for reporting (if LLM ran successfully)
             if not llm_error_occurred:
                 llm_stats = self.llm_orchestrator.get_stats()
-                llm_redlines_count = llm_stats.get('validated_redlines', 0)
+                llm_redlines_count = len(llm_redlines)
 
                 print(f"Job {job_id}: All-Claude analysis complete:")
                 print(f"  - Rule-based: {len(rule_redlines)}")
-                print(f"  - Claude validated: {llm_redlines_count}")
+                print(f"  - Claude (LLM-only): {llm_redlines_count}")
                 print(f"  - Total (merged): {len(all_redlines)}")
+                print(f"  - LLM-only: {merge_stats['llm_only']}")
+                print(f"  - Rule-only: {merge_stats['rule_only']}")
+                print(f"  - Both found: {merge_stats['both_found']}")
                 print(f"  - Validation rate: {llm_stats.get('validation_rate', 1.0)*100:.0f}%")
             else:
                 llm_stats = {'error': 'LLM analysis failed'}
@@ -156,10 +177,11 @@ class DocumentProcessor:
 
             # Create comparison stats for backward compatibility
             comparison_stats = {
-                'llm_only': llm_redlines_count,
-                'rule_only': len(rule_redlines),
-                'both_found': llm_stats.get('conflicts_resolved', 0),
-                'total': len(all_redlines)
+                'llm_only': merge_stats['llm_only'],
+                'rule_only': merge_stats['rule_only'],
+                'both_found': merge_stats['both_found'],
+                'total': len(all_redlines),
+                'conflicts_resolved': merge_stats.get('conflicts_resolved', 0)
             }
 
             # Validate all redlines
@@ -206,6 +228,21 @@ class DocumentProcessor:
             # Update status: complete
             await self._update_status(status_callback, JobStatus.COMPLETE, 100)
 
+            # Calculate quality metrics for monitoring
+            quality_metrics = self._calculate_quality_metrics(
+                rule_redlines, llm_redlines, valid_redlines, merge_stats
+            )
+
+            # Log critical metrics for monitoring
+            if quality_metrics['rule_preservation_rate'] < 90:
+                logging.getLogger(__name__).warning(
+                    f"Low rule preservation rate: {quality_metrics['rule_preservation_rate']:.1f}%"
+                )
+            if quality_metrics.get('llm_conversion_rate', 100) < 80:
+                logging.getLogger(__name__).warning(
+                    f"Low LLM conversion rate: {quality_metrics.get('llm_conversion_rate', 0):.1f}%"
+                )
+
             # Return results with All-Claude statistics
             result = {
                 'job_id': job_id,
@@ -231,7 +268,9 @@ class DocumentProcessor:
                         'recall': llm_stats.get('opus_model', 'claude-opus'),
                         'validation': llm_stats.get('sonnet_model', 'claude-sonnet-4')
                     }
-                }
+                },
+                # Quality metrics for monitoring
+                'quality_metrics': quality_metrics
             }
 
             # Save result
@@ -288,6 +327,71 @@ class DocumentProcessor:
         doc.save(str(output_path))
 
         return output_path
+
+    def _calculate_quality_metrics(
+        self,
+        rule_redlines: List[Dict],
+        llm_redlines: List[Dict],
+        valid_redlines: List[Dict],
+        merge_stats: Dict
+    ) -> Dict:
+        """
+        Calculate quality metrics for monitoring and alerting.
+
+        Returns:
+            Dictionary with quality metrics including preservation and conversion rates
+        """
+        metrics = {}
+
+        # Rule preservation rate - what percentage of rules made it to final output
+        if len(rule_redlines) > 0:
+            rule_preserved_count = merge_stats['rule_only'] + merge_stats['both_found']
+            metrics['rule_preservation_rate'] = (rule_preserved_count / len(rule_redlines)) * 100
+        else:
+            metrics['rule_preservation_rate'] = 100
+
+        # LLM conversion rate - what percentage of LLM suggestions were successfully mapped
+        if len(llm_redlines) > 0:
+            llm_preserved_count = merge_stats['llm_only'] + merge_stats['both_found']
+            metrics['llm_conversion_rate'] = (llm_preserved_count / len(llm_redlines)) * 100
+        else:
+            metrics['llm_conversion_rate'] = 100
+
+        # Validation success rate - what percentage survived validation
+        initial_count = len(rule_redlines) + len(llm_redlines)
+        if initial_count > 0:
+            metrics['validation_success_rate'] = (len(valid_redlines) / initial_count) * 100
+        else:
+            metrics['validation_success_rate'] = 100
+
+        # Merge efficiency - how many overlaps were resolved
+        metrics['merge_efficiency'] = merge_stats.get('conflicts_resolved', 0)
+
+        # Coverage metrics
+        metrics['total_coverage'] = len(valid_redlines)
+        metrics['rule_contribution'] = merge_stats['rule_only'] + merge_stats['both_found']
+        metrics['llm_contribution'] = merge_stats['llm_only'] + merge_stats['both_found']
+
+        # Health score - composite metric for overall quality
+        health_score = (
+            metrics['rule_preservation_rate'] * 0.4 +  # Rules are critical
+            metrics['llm_conversion_rate'] * 0.3 +     # LLM adds value
+            metrics['validation_success_rate'] * 0.3   # Validation ensures quality
+        )
+        metrics['health_score'] = health_score
+
+        # Alert thresholds
+        metrics['alerts'] = []
+        if metrics['rule_preservation_rate'] < 90:
+            metrics['alerts'].append('LOW_RULE_PRESERVATION')
+        if metrics['llm_conversion_rate'] < 80:
+            metrics['alerts'].append('LOW_LLM_CONVERSION')
+        if metrics['validation_success_rate'] < 70:
+            metrics['alerts'].append('LOW_VALIDATION_RATE')
+        if health_score < 75:
+            metrics['alerts'].append('LOW_HEALTH_SCORE')
+
+        return metrics
 
     def _compare_and_combine_redlines(
         self,

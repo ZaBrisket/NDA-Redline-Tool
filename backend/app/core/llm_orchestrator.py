@@ -16,6 +16,22 @@ from enum import Enum
 import structlog
 from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError
 
+# Import settings for model configuration
+try:
+    from ..config.settings import Settings
+    settings = Settings()
+except Exception:
+    # Fallback if settings can't be loaded
+    settings = None
+
+# Import ClauseMapper for robust text mapping
+try:
+    from .clause_mapper import ClauseMapper
+    CLAUSE_MAPPER_AVAILABLE = True
+except ImportError:
+    CLAUSE_MAPPER_AVAILABLE = False
+    ClauseMapper = None
+
 # Try to import optional monitoring dependencies
 try:
     from prometheus_client import Counter, Histogram, Gauge
@@ -122,7 +138,9 @@ class AnthropicExclusiveOrchestrator:
         api_key: str,
         max_retries: int = 5,
         circuit_breaker_threshold: int = 5,
-        circuit_breaker_reset_time: int = 60
+        circuit_breaker_reset_time: int = 60,
+        opus_model: Optional[str] = None,
+        sonnet_model: Optional[str] = None
     ):
         """
         Initialize orchestrator with production configurations
@@ -132,12 +150,31 @@ class AnthropicExclusiveOrchestrator:
             max_retries: Maximum retry attempts for transient errors
             circuit_breaker_threshold: Failures before circuit opens
             circuit_breaker_reset_time: Seconds before circuit reset attempt
+            opus_model: Claude Opus model to use (defaults to settings)
+            sonnet_model: Claude Sonnet model to use (defaults to settings)
         """
         if not api_key or not api_key.startswith("sk-ant-"):
             raise ValueError(f"Invalid Anthropic API key format. Must start with 'sk-ant-'")
 
         self.client = AsyncAnthropic(api_key=api_key, max_retries=0)  # Manual retry control
         self.max_retries = max_retries
+
+        # Load model configurations from settings or use provided values
+        if opus_model:
+            self.opus_model = opus_model
+        elif settings and hasattr(settings, 'claude_opus_model'):
+            self.opus_model = settings.claude_opus_model
+        else:
+            # Use the current working model as fallback
+            self.opus_model = "claude-3-opus-20240229"
+
+        if sonnet_model:
+            self.sonnet_model = sonnet_model
+        elif settings and hasattr(settings, 'claude_sonnet_model'):
+            self.sonnet_model = settings.claude_sonnet_model
+        else:
+            # Use the actually available Sonnet model
+            self.sonnet_model = "claude-3-5-sonnet-20240620"  # This is a known working model
 
         # Circuit breaker configuration
         self.circuit_breaker_threshold = circuit_breaker_threshold
@@ -165,11 +202,93 @@ class AnthropicExclusiveOrchestrator:
             'processing_times': []
         }
 
+        # Model availability flags
+        self.opus_available = True
+        self.sonnet_available = True
+        self.validation_rate = 1.0  # Default 100% validation
+        self.enable_validation = True
+
+        # Initialize ClauseMapper for robust text mapping
+        if CLAUSE_MAPPER_AVAILABLE:
+            self.clause_mapper = ClauseMapper(confidence_threshold=75.0)
+            logger.info("Initialized ClauseMapper for robust text mapping")
+        else:
+            self.clause_mapper = None
+            logger.warning("ClauseMapper not available - using fallback string matching")
+
         logger.info(
             "Initialized Anthropic orchestrator",
             max_retries=max_retries,
-            circuit_breaker_threshold=circuit_breaker_threshold
+            circuit_breaker_threshold=circuit_breaker_threshold,
+            opus_model=self.opus_model,
+            sonnet_model=self.sonnet_model
         )
+
+        # Run startup health check in background (don't block init)
+        asyncio.create_task(self._startup_health_check())
+
+    async def _startup_health_check(self):
+        """
+        Test model availability at startup
+        Non-blocking - runs in background and updates availability flags
+        """
+        # Test Opus model
+        try:
+            test_response = await asyncio.wait_for(
+                self.client.messages.create(
+                    model=self.opus_model,
+                    max_tokens=10,
+                    temperature=0.0,
+                    messages=[{"role": "user", "content": "Say 'OK'"}]
+                ),
+                timeout=10.0
+            )
+            self.opus_available = True
+            logger.info(f"✓ Claude Opus model '{self.opus_model}' is available")
+        except Exception as e:
+            self.opus_available = False
+            logger.error(
+                f"✗ Claude Opus model '{self.opus_model}' is NOT available",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            if "not_found" in str(e).lower():
+                logger.error(f"Model '{self.opus_model}' does not exist. Check your configuration.")
+
+        # Test Sonnet model
+        try:
+            test_response = await asyncio.wait_for(
+                self.client.messages.create(
+                    model=self.sonnet_model,
+                    max_tokens=10,
+                    temperature=0.0,
+                    messages=[{"role": "user", "content": "Say 'OK'"}]
+                ),
+                timeout=10.0
+            )
+            self.sonnet_available = True
+            logger.info(f"✓ Claude Sonnet model '{self.sonnet_model}' is available")
+        except Exception as e:
+            self.sonnet_available = False
+            logger.warning(
+                f"✗ Claude Sonnet validation model '{self.sonnet_model}' is NOT available",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            if "not_found" in str(e).lower():
+                logger.warning(f"Model '{self.sonnet_model}' does not exist. Validation will be disabled.")
+
+            # Disable validation if Sonnet is not available
+            self.enable_validation = False
+            logger.warning("Sonnet validation has been DISABLED due to model unavailability")
+
+        # Report overall health status
+        if self.opus_available and self.sonnet_available:
+            logger.info("✓ All Claude models are healthy and ready")
+        elif self.opus_available and not self.sonnet_available:
+            logger.warning("⚠ Running in degraded mode: Sonnet validation disabled")
+        elif not self.opus_available:
+            logger.error("✗ CRITICAL: Claude Opus is unavailable - service cannot function")
 
     async def analyze_document(
         self,
@@ -324,7 +443,7 @@ class AnthropicExclusiveOrchestrator:
         Perform primary analysis with Claude Opus
         Includes comprehensive retry logic and error handling
         """
-        model = "claude-3-opus-20240229"
+        model = self.opus_model
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -455,7 +574,19 @@ class AnthropicExclusiveOrchestrator:
         Validate Opus findings with Claude Sonnet
         More lenient error handling as validation is supplementary
         """
-        model = "claude-3-5-sonnet-20241020"  # Correct model name (October 20, not 22)
+        # Check if validation is enabled and Sonnet is available
+        if not self.enable_validation or not self.sonnet_available:
+            logger.info(
+                "Skipping Sonnet validation",
+                enable_validation=self.enable_validation,
+                sonnet_available=self.sonnet_available,
+                reason="validation_disabled" if not self.enable_validation else "model_unavailable"
+            )
+            # Return the original Opus results without validation
+            return opus_result.get('redlines', [])
+
+        # Use model from settings/config instead of hard-coded value
+        model = self.sonnet_model
 
         try:
             if PROMETHEUS_AVAILABLE:
@@ -893,11 +1024,41 @@ Respond with a JSON object containing:
 
         return final_redlines
 
-    def _convert_claude_to_document_format(self, claude_redlines: List[Dict], document_text: str) -> List[Dict]:
+    def _convert_claude_to_document_format(self, claude_redlines: List[Dict], document_text: str, indexer=None) -> List[Dict]:
         """
         Convert Claude's conceptual redlines to document position format.
         Maps high-level redlines to specific text positions.
+        Uses ClauseMapper for robust fuzzy matching when available.
         """
+        # Use ClauseMapper if available for robust mapping
+        if self.clause_mapper:
+            converted, stats = self.clause_mapper.convert_redlines_with_mapping(
+                claude_redlines, document_text, indexer
+            )
+
+            # Log conversion statistics
+            logger.info(
+                "ClauseMapper conversion complete",
+                total=stats['total'],
+                converted=stats['converted'],
+                failed=stats['failed'],
+                average_confidence=stats.get('average_confidence', 0)
+            )
+
+            # Warn if conversion rate is low
+            if stats['total'] > 0:
+                conversion_rate = (stats['converted'] / stats['total']) * 100
+                if conversion_rate < 80:
+                    logger.warning(
+                        f"Low conversion rate: {conversion_rate:.1f}%",
+                        converted=stats['converted'],
+                        failed=stats['failed']
+                    )
+
+            return converted
+
+        # Fallback to original naive matching if ClauseMapper not available
+        logger.warning("Using fallback string matching (ClauseMapper not available)")
         converted = []
 
         for redline in claude_redlines:
