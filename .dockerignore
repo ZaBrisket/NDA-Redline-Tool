@@ -1,0 +1,269 @@
+# .dockerignore - Excludes files from Docker build context
+# This significantly reduces build context size and prevents sensitive files from being included
+
+# ============================================
+# VERSION CONTROL
+# ============================================
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# ============================================
+# ENVIRONMENT & SECRETS
+# ============================================
+# CRITICAL: Never include environment files with secrets
+.env
+.env.*
+!.env.example
+!.env.template
+*.env
+secrets/
+credentials/
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# ============================================
+# DEVELOPMENT & IDE
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+Thumbs.db
+.vs/
+.vscode-server/
+.devcontainer/
+*.code-workspace
+
+# ============================================
+# PYTHON
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+wheels/
+pip-wheel-metadata/
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+*.cover
+*.log
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+venv/
+env/
+ENV/
+.venv/
+
+# ============================================
+# NODE.JS / FRONTEND
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn/
+.next/
+out/
+dist/
+.nuxt/
+.cache/
+.parcel-cache/
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# ============================================
+# DOCUMENTATION
+# ============================================
+*.md
+!README.md
+docs/
+documentation/
+*.pdf
+*.docx
+*.xlsx
+*.pptx
+CHANGELOG*
+LICENSE*
+AUTHORS*
+CONTRIBUTORS*
+NOTICE*
+
+# ============================================
+# TESTING
+# ============================================
+tests/
+test/
+spec/
+*.test.py
+*.spec.py
+test_*.py
+*_test.py
+coverage/
+.nyc_output/
+junit.xml
+test-results/
+cypress/
+e2e/
+
+# ============================================
+# BUILD & DEPLOYMENT
+# ============================================
+Dockerfile*
+!Dockerfile
+docker-compose*.yml
+docker-compose*.yaml
+.dockerignore
+kubernetes/
+k8s/
+helm/
+charts/
+*.tar
+*.tar.gz
+*.zip
+*.war
+*.jar
+
+# ============================================
+# RAILWAY SPECIFIC
+# ============================================
+railway.json
+nixpacks.toml
+.nixpacks/
+railway.toml
+
+# ============================================
+# MACOS
+# ============================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# ============================================
+# WINDOWS
+# ============================================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.msi
+*.msm
+*.msp
+
+# ============================================
+# LINUX
+# ============================================
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ============================================
+# LOGS & TEMPORARY FILES
+# ============================================
+logs/
+*.log
+*.pid
+*.seed
+*.pid.lock
+tmp/
+temp/
+cache/
+*.tmp
+*.temp
+*.cache
+*.bak
+*.backup
+*.old
+*.orig
+
+# ============================================
+# DATABASE
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+data/
+database/
+migrations/
+seeds/
+
+# ============================================
+# UPLOADS & USER CONTENT
+# ============================================
+uploads/
+media/
+static/files/
+user_uploads/
+downloads/
+
+# ============================================
+# PROJECT SPECIFIC
+# ============================================
+# Frontend (deployed separately on Vercel)
+frontend/
+vercel.json
+
+# Local development files
+.env.local
+.env.development
+.env.production
+local/
+sandbox/
+scratch/
+
+# Any backup files
+backup/
+backups/
+*.backup
+
+# Railway logs and artifacts
+railway-logs/
+.railway/
+
+# ============================================
+# IMPORTANT NOTES:
+# ============================================
+# 1. This file MUST be in the same directory as your Dockerfile
+# 2. Patterns are relative to the build context directory
+# 3. Use ! to explicitly include files that match exclude patterns
+# 4. Order matters - later patterns override earlier ones
+# 5. Always test after changes: docker build . --no-cache

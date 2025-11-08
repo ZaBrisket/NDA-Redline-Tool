@@ -6,6 +6,7 @@ Optimized for production with reduced workers and proper logging
 import multiprocessing
 import os
 import sys
+import logging.config
 
 # Validate critical environment variables
 def validate_environment():
@@ -65,17 +66,89 @@ group = None
 tmp_upload_dir = None
 
 # Logging configuration
-# Railway reads from stdout/stderr directly
-# Application-level logging is handled by setup_railway_logging() in app/core/logger.py
+# Custom logging to properly route INFO to stdout and ERROR to stderr
+# This fixes the issue where all Gunicorn logs were going to stderr
+
+# Configure Python logging to properly separate stdout and stderr
+logconfig_dict = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'default': {
+            'format': '%(asctime)s [%(process)d] [%(levelname)s] %(message)s',
+            'datefmt': '%Y-%m-%d %H:%M:%S %z'
+        },
+        'access': {
+            'format': '%(message)s'
+        }
+    },
+    'handlers': {
+        'stdout_handler': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'default',
+            'stream': 'ext://sys.stdout',
+            'level': 'DEBUG'
+        },
+        'stderr_handler': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'default',
+            'stream': 'ext://sys.stderr',
+            'level': 'WARNING'
+        },
+        'access_handler': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'access',
+            'stream': 'ext://sys.stdout'
+        }
+    },
+    'loggers': {
+        'gunicorn': {
+            'level': 'DEBUG',
+            'handlers': ['stdout_handler', 'stderr_handler'],
+            'propagate': False
+        },
+        'gunicorn.error': {
+            'level': 'DEBUG',
+            'handlers': ['stdout_handler', 'stderr_handler'],
+            'propagate': False
+        },
+        'gunicorn.access': {
+            'level': 'INFO',
+            'handlers': ['access_handler'],
+            'propagate': False
+        },
+        'uvicorn': {
+            'level': 'INFO',
+            'handlers': ['stdout_handler', 'stderr_handler'],
+            'propagate': False
+        },
+        'uvicorn.error': {
+            'level': 'INFO',
+            'handlers': ['stdout_handler', 'stderr_handler'],
+            'propagate': False
+        },
+        'uvicorn.access': {
+            'level': 'INFO',
+            'handlers': ['access_handler'],
+            'propagate': False
+        }
+    },
+    'root': {
+        'level': 'INFO',
+        'handlers': ['stdout_handler', 'stderr_handler']
+    }
+}
+
+# Apply the custom logging configuration
+logging.config.dictConfig(logconfig_dict)
+
+# Still set these for Gunicorn's internal use
 accesslog = '-'  # stdout
-errorlog = '-'   # stderr
+errorlog = '-'   # stderr (for actual errors only now)
 loglevel = os.getenv('LOG_LEVEL', 'info').lower()
 
 # Access log format with timing information
 access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)sµs'
-
-# Note: We don't use logconfig_dict here to avoid conflicts with the application's
-# Railway-optimized logging configuration (app/core/logger.py)
 
 # Worker lifecycle hooks
 def on_starting(server):

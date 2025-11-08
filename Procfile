@@ -1,1 +1,1 @@
-web: cd backend && /opt/venv/bin/gunicorn app.main:app -c gunicorn.conf.py
+web: /opt/venv/bin/gunicorn app.main:app -c gunicorn.conf.py
